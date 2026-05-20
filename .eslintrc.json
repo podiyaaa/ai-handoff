@@ -1,0 +1,51 @@
+{
+  "root": true,
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module"
+  },
+  "plugins": ["@typescript-eslint"],
+  "extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/recommended"
+  ],
+  "rules": {
+    "@typescript-eslint/no-unused-vars": "warn",
+    "@typescript-eslint/no-explicit-any": "warn",
+
+    "no-restricted-imports": ["error", {
+      "patterns": [
+        {
+          "group": ["http", "https", "node:http", "node:https"],
+          "message": "Network access is prohibited — AI Handoff is fully offline."
+        }
+      ],
+      "paths": [
+        { "name": "node-fetch",     "message": "Network access is prohibited." },
+        { "name": "axios",          "message": "Network access is prohibited." },
+        { "name": "got",            "message": "Network access is prohibited." },
+        { "name": "superagent",     "message": "Network access is prohibited." },
+        { "name": "cross-fetch",    "message": "Network access is prohibited." },
+        { "name": "undici",         "message": "Network access is prohibited." },
+        { "name": "isomorphic-fetch","message": "Network access is prohibited." }
+      ]
+    }],
+
+    "no-restricted-globals": ["error",
+      {
+        "name": "fetch",
+        "message": "Network access is prohibited — AI Handoff is fully offline."
+      },
+      {
+        "name": "XMLHttpRequest",
+        "message": "Network access is prohibited — AI Handoff is fully offline."
+      }
+    ]
+  },
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "ignorePatterns": ["dist/", "out/", "node_modules/"]
+}

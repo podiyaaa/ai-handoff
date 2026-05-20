@@ -161,7 +161,6 @@ export class InMemoryMemento implements vscode.Memento {
     }
   }
 
-  setKeysForSync(_keys: readonly string[]): void {
-    // No-op for tests.
-  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  setKeysForSync(_keys: readonly string[]): void { /* no-op for tests */ }
 }

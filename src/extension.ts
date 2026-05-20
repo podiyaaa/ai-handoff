@@ -34,6 +34,10 @@ interface SessionState {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  // Safety net: throw immediately if anything tries to make a network call.
+  // This extension is fully offline — no telemetry, no API calls, nothing.
+  enforceOffline();
+
   const workspaceRoot = getWorkspaceRoot();
   const store = new SelectionStore(context.workspaceState);
 
@@ -94,7 +98,7 @@ export function activate(context: vscode.ExtensionContext): void {
       case 'instructionsChange':
         session.currentInstructions = msg.text;
         break;
-      case 'overrideFile':
+      case 'overrideFile': {
         session.overriddenPaths.add(msg.path);
         // Add the overridden path to the selection too, so it actually
         // gets included on next generate.
@@ -102,6 +106,7 @@ export function activate(context: vscode.ExtensionContext): void {
         sel.add(msg.path);
         await treeProvider.setSelection(Array.from(sel));
         break;
+      }
       case 'generate':
         await runGenerate(treeProvider, actionPanel, session, workspaceRoot);
         break;
@@ -197,6 +202,41 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   // No cleanup needed beyond disposal of context.subscriptions.
+}
+
+// ---------------------------------------------------------------------
+// Offline enforcement
+// ---------------------------------------------------------------------
+
+/**
+ * Patch the global environment so any accidental network call throws
+ * immediately with a clear message, rather than silently succeeding or
+ * failing with a cryptic network error.
+ *
+ * Covers:
+ *   - globalThis.fetch  (browser-style fetch, available in newer Node/VS Code)
+ *   - globalThis.XMLHttpRequest  (unlikely in Node, but belt-and-suspenders)
+ */
+function enforceOffline(): void {
+  const msg =
+    '[AI Handoff] Network access is disabled — this extension is fully offline. ' +
+    'No data ever leaves your machine.';
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = globalThis as any;
+
+  // Override fetch if it exists in the global scope
+  if (typeof g.fetch === 'function') {
+    g.fetch = (): never => { throw new Error(msg); };
+  }
+
+  // Override XMLHttpRequest if it exists
+  if (typeof g.XMLHttpRequest !== 'undefined') {
+    g.XMLHttpRequest = class {
+      open(): never { throw new Error(msg); }
+      send(): never { throw new Error(msg); }
+    };
+  }
 }
 
 // ---------------------------------------------------------------------
