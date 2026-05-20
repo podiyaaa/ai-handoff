@@ -3,7 +3,7 @@
   "displayName": "AI Handoff",
   "description": "Select multiple files and generate a clean, structured handoff (directory tree + file contents) ready to paste into any AI chat — Claude, ChatGPT, Gemini, and more.",
   "version": "0.1.0",
-  "publisher": "podiyaaa",
+  "publisher": "RavinduKanchana",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -48,11 +48,13 @@
     "views": {
       "aiHandoff": [
         {
+          "icon": "media/icon.png",
           "id": "aiHandoff.fileTree",
           "name": "Files",
           "contextualTitle": "AI Handoff"
         },
         {
+          "icon": "media/icon.svg",
           "id": "aiHandoff.actionPanel",
           "name": "Actions",
           "type": "webview",
@@ -118,7 +120,11 @@
       "properties": {
         "aiHandoff.outputFormat": {
           "type": "string",
-          "enum": ["xml", "markdown", "plain"],
+          "enum": [
+            "xml",
+            "markdown",
+            "plain"
+          ],
           "enumDescriptions": [
             "XML-style tags — best for AI parsing (default)",
             "Markdown code fences with language tags",
@@ -150,13 +156,20 @@
         },
         "aiHandoff.customIgnorePatterns": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Additional glob patterns to ignore (e.g., **/*.log, **/tmp/**)."
         },
         "aiHandoff.selectionMemory": {
           "type": "string",
-          "enum": ["off", "lastOnly", "namedSets", "both"],
+          "enum": [
+            "off",
+            "lastOnly",
+            "namedSets",
+            "both"
+          ],
           "enumDescriptions": [
             "Don't remember any selection",
             "Auto-restore the last selection on workspace reopen (default)",
@@ -168,7 +181,10 @@
         },
         "aiHandoff.binaryHandling": {
           "type": "string",
-          "enum": ["placeholder", "skip"],
+          "enum": [
+            "placeholder",
+            "skip"
+          ],
           "enumDescriptions": [
             "Include as <file path=\"...\" type=\"binary\" /> placeholder (default)",
             "Skip entirely (only show in skipped list)"
