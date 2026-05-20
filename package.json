@@ -3,7 +3,7 @@
   "displayName": "AI Handoff",
   "description": "Select multiple files and generate a clean, structured handoff (directory tree + file contents) ready to paste into any AI chat — Claude, ChatGPT, Gemini, and more.",
   "version": "0.1.0",
-  "publisher": "your-publisher-id",
+  "publisher": "podiyaaa",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -25,12 +25,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/ai-handoff.git"
+    "url": "https://github.com/podiyaaa/ai-handoff.git"
   },
   "bugs": {
-    "url": "https://github.com/your-username/ai-handoff/issues"
+    "url": "https://github.com/podiyaaa/ai-handoff/issues"
   },
-  "homepage": "https://github.com/your-username/ai-handoff#readme",
+  "homepage": "https://github.com/podiyaaa/ai-handoff#readme",
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished"

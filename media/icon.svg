@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="arrow-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#00000033"/>
+    </filter>
+  </defs>
+
+  <!-- Rounded background -->
+  <rect width="128" height="128" rx="26" fill="url(#bg)"/>
+
+  <!-- Back doc (offset) -->
+  <rect x="22" y="22" width="54" height="66" rx="7" fill="white" opacity="0.25"/>
+
+  <!-- Middle doc (offset) -->
+  <rect x="29" y="29" width="54" height="66" rx="7" fill="white" opacity="0.45"/>
+
+  <!-- Front doc -->
+  <rect x="36" y="18" width="54" height="70" rx="7" fill="white" filter="url(#shadow)"/>
+
+  <!-- Folded corner -->
+  <path d="M78 18 L90 30 L78 30 Z" fill="#e0e7ff"/>
+  <path d="M78 18 L90 30" stroke="#c7d2fe" stroke-width="1" fill="none"/>
+
+  <!-- Text lines on doc -->
+  <rect x="45" y="38" width="30" height="4" rx="2" fill="#6366f1" opacity="0.35"/>
+  <rect x="45" y="48" width="36" height="4" rx="2" fill="#6366f1" opacity="0.25"/>
+  <rect x="45" y="58" width="26" height="4" rx="2" fill="#6366f1" opacity="0.25"/>
+  <rect x="45" y="68" width="32" height="4" rx="2" fill="#6366f1" opacity="0.25"/>
+
+  <!-- Green send circle -->
+  <circle cx="90" cy="90" r="24" fill="url(#arrow-grad)" filter="url(#shadow)"/>
+
+  <!-- Right arrow -->
+  <path d="M80 90 H99" stroke="white" stroke-width="4" stroke-linecap="round"/>
+  <path d="M91 82 L100 90 L91 98" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
