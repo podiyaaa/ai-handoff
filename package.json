@@ -1,0 +1,237 @@
+{
+  "name": "ai-handoff",
+  "displayName": "AI Handoff",
+  "description": "Select multiple files and generate a clean, structured handoff (directory tree + file contents) ready to paste into any AI chat — Claude, ChatGPT, Gemini, and more.",
+  "version": "0.1.0",
+  "publisher": "your-publisher-id",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other",
+    "Snippets"
+  ],
+  "keywords": [
+    "ai",
+    "claude",
+    "chatgpt",
+    "context",
+    "prompt",
+    "handoff",
+    "bundle",
+    "llm"
+  ],
+  "icon": "media/icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/ai-handoff.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/ai-handoff/issues"
+  },
+  "homepage": "https://github.com/your-username/ai-handoff#readme",
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aiHandoff",
+          "title": "AI Handoff",
+          "icon": "media/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "aiHandoff": [
+        {
+          "id": "aiHandoff.fileTree",
+          "name": "Files",
+          "contextualTitle": "AI Handoff"
+        },
+        {
+          "id": "aiHandoff.actionPanel",
+          "name": "Actions",
+          "type": "webview",
+          "contextualTitle": "AI Handoff"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "aiHandoff.generateFromExplorer",
+        "title": "AI Handoff: Generate from selection"
+      },
+      {
+        "command": "aiHandoff.generateFromPanel",
+        "title": "AI Handoff: Generate handoff",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "aiHandoff.refreshTree",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aiHandoff.clearSelection",
+        "title": "Clear selection",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "aiHandoff.saveSelectionSet",
+        "title": "AI Handoff: Save current selection as set..."
+      },
+      {
+        "command": "aiHandoff.loadSelectionSet",
+        "title": "AI Handoff: Load saved selection set..."
+      },
+      {
+        "command": "aiHandoff.deleteSelectionSet",
+        "title": "AI Handoff: Delete saved selection set..."
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "aiHandoff.generateFromExplorer",
+          "group": "7_modification@99"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "aiHandoff.refreshTree",
+          "when": "view == aiHandoff.fileTree",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiHandoff.clearSelection",
+          "when": "view == aiHandoff.fileTree",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Handoff",
+      "properties": {
+        "aiHandoff.outputFormat": {
+          "type": "string",
+          "enum": ["xml", "markdown", "plain"],
+          "enumDescriptions": [
+            "XML-style tags — best for AI parsing (default)",
+            "Markdown code fences with language tags",
+            "Plain text with simple separators"
+          ],
+          "default": "xml",
+          "description": "Default output format for the handoff."
+        },
+        "aiHandoff.includeLineNumbers": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include line numbers in file contents."
+        },
+        "aiHandoff.maxFileSizeKB": {
+          "type": "number",
+          "default": 1024,
+          "minimum": 1,
+          "description": "Files larger than this size (in KB) will be skipped. Can be overridden per-file."
+        },
+        "aiHandoff.respectGitignore": {
+          "type": "boolean",
+          "default": true,
+          "description": "Skip files matched by .gitignore patterns."
+        },
+        "aiHandoff.smartFilter": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-skip junk paths (node_modules, .git, dist, build, etc.) and binary files."
+        },
+        "aiHandoff.customIgnorePatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional glob patterns to ignore (e.g., **/*.log, **/tmp/**)."
+        },
+        "aiHandoff.selectionMemory": {
+          "type": "string",
+          "enum": ["off", "lastOnly", "namedSets", "both"],
+          "enumDescriptions": [
+            "Don't remember any selection",
+            "Auto-restore the last selection on workspace reopen (default)",
+            "Only support named saved selection sets",
+            "Both: auto-restore last + named saved sets"
+          ],
+          "default": "lastOnly",
+          "description": "How the extension remembers your file selections."
+        },
+        "aiHandoff.binaryHandling": {
+          "type": "string",
+          "enum": ["placeholder", "skip"],
+          "enumDescriptions": [
+            "Include as <file path=\"...\" type=\"binary\" /> placeholder (default)",
+            "Skip entirely (only show in skipped list)"
+          ],
+          "default": "placeholder",
+          "description": "How to handle binary files (images, executables, etc.)."
+        },
+        "aiHandoff.tokenEstimationRatio": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "description": "Characters per token used in the token estimate (default 4)."
+        },
+        "aiHandoff.showCustomInstructions": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show the 'Custom Instructions' text area in the action panel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && node esbuild.js --production",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src --ext ts",
+    "test": "npm run compile-tests && npm run test:unit && npm run test:integration",
+    "compile-tests": "tsc -p tsconfig.test.json",
+    "test:unit": "mocha --require src/test/unit/setup.js --require ts-node/register \"src/test/unit/**/*.test.ts\"",
+    "test:integration": "node ./out/test/integration/runTest.js",
+    "test:ui": "extest setup-and-run './out/test/ui/*.test.js' --code_version max --code_settings ./src/test/ui/settings.json --extensions_dir .test-extensions",
+    "coverage": "c8 npm run test:unit",
+    "vsce:package": "vsce package",
+    "vsce:publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/chai": "^4.3.11",
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^18.19.0",
+    "@types/sinon": "^17.0.3",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.9.1",
+    "c8": "^9.1.0",
+    "chai": "^4.4.1",
+    "esbuild": "^0.20.0",
+    "eslint": "^8.57.0",
+    "glob": "^10.3.10",
+    "mocha": "^10.3.0",
+    "npm-run-all": "^4.1.5",
+    "sinon": "^17.0.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3",
+    "vscode-extension-tester": "^8.23.0"
+  },
+  "dependencies": {
+    "ignore": "^5.3.1"
+  }
+}

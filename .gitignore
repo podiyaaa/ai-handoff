@@ -1,0 +1,28 @@
+# Build output
+dist/
+out/
+
+# Dependencies
+node_modules/
+
+# VS Code test runner artifacts
+.vscode-test/
+.test-extensions/
+
+# Package archives
+*.vsix
+*.zip
+
+# Extracted zip / duplicate directory
+ai-handoff/
+
+# macOS
+.DS_Store
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Editor
+.idea/
+*.iml
