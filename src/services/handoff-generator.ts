@@ -39,6 +39,62 @@ export async function readGitignore(workspaceRoot: string): Promise<string | und
 }
 
 /**
+ * Expand any directory paths in the selection to their constituent files,
+ * recursing into sub-directories. Files already present in the list are
+ * kept as-is. Duplicate paths (e.g. a dir AND one of its files) are
+ * deduplicated by relative path, keeping the first occurrence.
+ */
+async function expandToFiles(
+  selected: SelectedFile[],
+  workspaceRoot: string,
+): Promise<SelectedFile[]> {
+  const seen = new Set<string>();
+  const out: SelectedFile[] = [];
+
+  async function processPath(relativePath: string, absolutePath: string): Promise<void> {
+    if (seen.has(relativePath)) {
+      return;
+    }
+    let stat: import('fs').Stats;
+    try {
+      stat = await fs.stat(absolutePath);
+    } catch {
+      // Stat failed — pass through to the main loop which will record the error.
+      seen.add(relativePath);
+      out.push({ relativePath, absolutePath });
+      return;
+    }
+    if (stat.isDirectory()) {
+      // Recursively expand to child files — this is what makes right-click on
+      // a folder work in the handoff generator.
+      let entries: import('fs').Dirent[];
+      try {
+        entries = await fs.readdir(absolutePath, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const childAbs = path.join(absolutePath, entry.name);
+        const childRel = path
+          .relative(workspaceRoot, childAbs)
+          .split(path.sep)
+          .join('/');
+        await processPath(childRel, childAbs);
+      }
+    } else if (stat.isFile()) {
+      seen.add(relativePath);
+      out.push({ relativePath, absolutePath });
+    }
+    // Symlinks to neither file nor dir are silently dropped.
+  }
+
+  for (const sel of selected) {
+    await processPath(sel.relativePath, sel.absolutePath);
+  }
+  return out;
+}
+
+/**
  * Run the full handoff pipeline.
  */
 export async function generateHandoff(
@@ -58,11 +114,16 @@ export async function generateHandoff(
     maxFileSizeKB: options.maxFileSizeKB,
   });
 
+  // Expand any directory paths (e.g. from Explorer right-click) to their
+  // individual files before running the filter pipeline. Deduplicated by
+  // relative path so selecting both a folder and one of its files is safe.
+  const expanded = await expandToFiles(selected, workspaceRoot);
+
   const overrides = new Set(options.overriddenPaths ?? []);
   const included: IncludedFile[] = [];
   const skipped: SkippedFile[] = [];
 
-  for (const sel of selected) {
+  for (const sel of expanded) {
     let sizeBytes: number;
     try {
       const stat = await fs.stat(sel.absolutePath);

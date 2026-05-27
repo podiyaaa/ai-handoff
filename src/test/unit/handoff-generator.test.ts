@@ -197,4 +197,42 @@ describe('generateHandoff — pipeline', () => {
     const expectedLabel = path.basename(root);
     expect(result.text).to.include(`${expectedLabel}/`);
   });
+
+  // ---- Directory-expansion (Bug 2 fix) --------------------------------
+
+  it('expands a directory path to its contained files', async () => {
+    // Selecting the 'src' dir should include src/index.ts + src/auth/login.ts
+    const result = await generateHandoff(
+      [sel(root, 'src')],
+      { ...baseOpts, smartFilter: false },
+      root,
+    );
+    const paths = result.included.map((f) => f.relativePath).sort();
+    expect(paths).to.deep.equal(['src/auth/login.ts', 'src/index.ts']);
+  });
+
+  it('deduplicates when a dir and one of its files are both selected', async () => {
+    // Selecting both 'src' and 'src/index.ts' should not produce a duplicate.
+    const result = await generateHandoff(
+      [sel(root, 'src'), sel(root, 'src/index.ts')],
+      { ...baseOpts, smartFilter: false },
+      root,
+    );
+    const paths = result.included.map((f) => f.relativePath);
+    const unique = [...new Set(paths)];
+    expect(paths).to.deep.equal(unique);
+    // And we still have both files
+    expect(paths.sort()).to.deep.equal(['src/auth/login.ts', 'src/index.ts']);
+  });
+
+  it('mixes directory and individual file selections correctly', async () => {
+    // src/auth dir + README.md file — no duplicates, all correct paths
+    const result = await generateHandoff(
+      [sel(root, 'src/auth'), sel(root, 'README.md')],
+      { ...baseOpts, smartFilter: false },
+      root,
+    );
+    const paths = result.included.map((f) => f.relativePath).sort();
+    expect(paths).to.deep.equal(['README.md', 'src/auth/login.ts']);
+  });
 });

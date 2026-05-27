@@ -76,8 +76,16 @@ export class FileTreeProvider
   /** Fires whenever the selection set changes. Emits the new list of paths. */
   readonly onDidChangeSelection = this._onDidChangeSelection.event;
 
-  /** The user's selection: POSIX-style relative paths. */
+  /** The user's selection: POSIX-style relative paths (files, or raw dir paths from right-click). */
   private selected = new Set<string>();
+
+  /**
+   * Directories the user has explicitly checked via the sidebar checkbox.
+   * Used only for display (directoryCheckState) — does NOT appear in getSelection().
+   * Separate from `selected` so that checking a subfolder never makes its parent
+   * appear fully-selected.
+   */
+  private checkedDirs = new Set<string>();
 
   /** Cached file watcher for the workspace, so we refresh on file changes. */
   private watcher: vscode.FileSystemWatcher | undefined;
@@ -168,9 +176,15 @@ export class FileTreeProvider
 
   /**
    * Replace the current selection. Triggers tree refresh + change event.
+   * Paths may be file or directory relative paths (the generator expands dirs).
    */
   async setSelection(paths: string[]): Promise<void> {
     this.selected = new Set(paths);
+    // checkedDirs is purely a sidebar-display concern. When selection is
+    // overwritten programmatically (e.g. right-click or load saved set) we
+    // reset it — the user hasn't clicked checkboxes, so no dir is "fully
+    // checked" from the sidebar's point of view.
+    this.checkedDirs = new Set();
     this._onDidChangeTreeData.fire();
     this._onDidChangeSelection.fire(this.getSelection());
   }
@@ -179,41 +193,53 @@ export class FileTreeProvider
    * Clear all selected items.
    */
   async clearSelection(): Promise<void> {
-    if (this.selected.size === 0) {
+    if (this.selected.size === 0 && this.checkedDirs.size === 0) {
       return;
     }
     this.selected.clear();
+    this.checkedDirs.clear();
     this._onDidChangeTreeData.fire();
     this._onDidChangeSelection.fire([]);
   }
 
   /**
    * Toggle a single file's checkbox.
+   * When unchecking, also clears any ancestor directories from checkedDirs
+   * because the directory is no longer fully selected as a unit.
    */
   async toggleFile(relativePath: string, checked: boolean): Promise<void> {
     if (checked) {
       this.selected.add(relativePath);
     } else {
       this.selected.delete(relativePath);
+      this.removeAncestorDirs(relativePath);
     }
     this._onDidChangeSelection.fire(this.getSelection());
   }
 
   /**
    * Toggle a directory — adds or removes all descendant files.
+   *
+   * Also maintains `checkedDirs` so that only explicitly-ticked directories
+   * show a checked checkbox in the sidebar (not their parents).
    */
   async toggleDirectory(absoluteDirPath: string, checked: boolean): Promise<void> {
+    const dirRelPath = this.toRelative(absoluteDirPath);
     const files = await this.listDescendantFiles(absoluteDirPath);
     if (checked) {
+      this.checkedDirs.add(dirRelPath);
       for (const f of files) {
         this.selected.add(this.toRelative(f));
       }
     } else {
+      this.checkedDirs.delete(dirRelPath);
+      // Also uncheck any ancestor directories — they are no longer fully selected.
+      this.removeAncestorDirs(dirRelPath);
       for (const f of files) {
         this.selected.delete(this.toRelative(f));
       }
     }
-    // Refresh the whole tree — parent indeterminate states may need updating
+    // Refresh the whole tree so ancestor/sibling checkbox states update.
     this._onDidChangeTreeData.fire();
     this._onDidChangeSelection.fire(this.getSelection());
   }
@@ -272,25 +298,47 @@ export class FileTreeProvider
   }
 
   /**
-   * Compute the tri-state checkbox value for a directory by inspecting
-   * its descendants in the cached selection set.
+   * Compute the checkbox state for a directory.
    *
-   * NOTE: We can't tell if ALL descendants are selected without listing
-   * the directory, which is async. As a pragmatic approximation, we use:
-   *   - Checked if at least one descendant prefix matches AND no known
-   *     descendants are missing (best-effort).
-   *   - For VS Code TreeView, we only report Checked or Unchecked
-   *     (no third state until VS Code 1.95+); intermediate state
-   *     just shows as Unchecked but the children carry the truth.
+   * Returns Checked when the user has explicitly ticked this directory OR
+   * an ancestor directory in the sidebar, OR when the directory path itself
+   * is in `selected` (e.g. added via Explorer right-click).
+   *
+   * Deliberately does NOT return Checked just because some descendant files
+   * are in `selected` — that was the source of Bug 1, where checking a
+   * subfolder made the parent appear fully selected.
    */
   private directoryCheckState(relativeDirPath: string): vscode.TreeItemCheckboxState {
-    const prefix = relativeDirPath.endsWith('/') ? relativeDirPath : `${relativeDirPath}/`;
-    for (const sel of this.selected) {
-      if (sel === relativeDirPath || sel.startsWith(prefix)) {
+    // Explicitly checked via the sidebar checkbox.
+    if (this.checkedDirs.has(relativeDirPath)) {
+      return vscode.TreeItemCheckboxState.Checked;
+    }
+    // An ancestor directory was explicitly checked — this subdir is implicitly
+    // fully selected as part of that parent selection.
+    const parts = relativeDirPath.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      if (this.checkedDirs.has(parts.slice(0, i).join('/'))) {
         return vscode.TreeItemCheckboxState.Checked;
       }
     }
+    // The directory path itself is in `selected` (e.g. added via right-click
+    // without going through the sidebar checkbox path).
+    if (this.selected.has(relativeDirPath)) {
+      return vscode.TreeItemCheckboxState.Checked;
+    }
     return vscode.TreeItemCheckboxState.Unchecked;
+  }
+
+  /**
+   * Remove all ancestor directory paths from `checkedDirs` for the given path.
+   * Called when a file or directory is unchecked — a parent can no longer be
+   * considered "fully selected" after one of its descendants is removed.
+   */
+  private removeAncestorDirs(relativePath: string): void {
+    const parts = relativePath.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      this.checkedDirs.delete(parts.slice(0, i).join('/'));
+    }
   }
 
   /**
