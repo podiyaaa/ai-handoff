@@ -5,6 +5,22 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-05-27
+
+### Fixed
+
+- **Folder selection no longer bleeds into parent directories** — checking a subfolder (e.g. `src/core`) no longer caused the parent (`src`) to appear fully selected in the sidebar. Clicking that falsely-checked parent would then select everything inside it. The sidebar now tracks explicitly-ticked directories separately so only the directories you actually clicked show a checkmark.
+- **Right-click on a folder now works** — selecting a folder in the Explorer and choosing "AI Handoff: Generate from selection" previously produced nothing (the folder path was silently skipped as "not a regular file"). Folders are now recursively expanded to their constituent files before the filter pipeline runs.
+- **Mixed folder + file selections are deduplicated** — selecting both a directory and one of its files no longer processes that file twice.
+
+## [0.1.1] — 2026-05-20
+
+### Changed
+
+- Updated publisher ID to `RavinduKanchana` for Marketplace listing
+- Added app icon and corrected repository / homepage URLs in `package.json`
+- Network access is now blocked at runtime (any accidental `fetch` or `XMLHttpRequest` call throws immediately with a clear message)
+
 ## [0.1.0] — Unreleased
 
 ### Added

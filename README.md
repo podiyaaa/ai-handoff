@@ -2,7 +2,7 @@
 
 > Select multiple files in VS Code and instantly generate a clean, structured handoff — directory tree + file contents — ready to paste into any AI chat. Works fully offline.
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.1.2-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Why?
@@ -53,7 +53,7 @@ Paste it into any AI chat. Done.
 ### From `.vsix`
 
 ```bash
-code --install-extension ai-handoff-0.1.0.vsix
+code --install-extension ai-handoff-0.1.2.vsix
 ```
 
 ## Usage
