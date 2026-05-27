@@ -2,7 +2,7 @@
 
 > Select multiple files in VS Code and instantly generate a clean, structured handoff — directory tree + file contents — ready to paste into any AI chat. Works fully offline.
 
-![Version](https://img.shields.io/badge/version-0.1.2-blue)
+![Version](https://img.shields.io/badge/version-0.1.3-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Why?
