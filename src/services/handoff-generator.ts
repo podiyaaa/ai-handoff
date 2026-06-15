@@ -44,10 +44,7 @@ export async function readGitignore(workspaceRoot: string): Promise<string | und
  * kept as-is. Duplicate paths (e.g. a dir AND one of its files) are
  * deduplicated by relative path, keeping the first occurrence.
  */
-async function expandToFiles(
-  selected: SelectedFile[],
-  workspaceRoot: string,
-): Promise<SelectedFile[]> {
+async function expandToFiles(selected: SelectedFile[]): Promise<SelectedFile[]> {
   const seen = new Set<string>();
   const out: SelectedFile[] = [];
 
@@ -75,10 +72,9 @@ async function expandToFiles(
       }
       for (const entry of entries) {
         const childAbs = path.join(absolutePath, entry.name);
-        const childRel = path
-          .relative(workspaceRoot, childAbs)
-          .split(path.sep)
-          .join('/');
+        // Build child relative path from parent's relative path so this works
+        // correctly for files from any workspace folder, not just the primary one.
+        const childRel = relativePath ? `${relativePath}/${entry.name}` : entry.name;
         await processPath(childRel, childAbs);
       }
     } else if (stat.isFile()) {
@@ -117,7 +113,7 @@ export async function generateHandoff(
   // Expand any directory paths (e.g. from Explorer right-click) to their
   // individual files before running the filter pipeline. Deduplicated by
   // relative path so selecting both a folder and one of its files is safe.
-  const expanded = await expandToFiles(selected, workspaceRoot);
+  const expanded = await expandToFiles(selected);
 
   const overrides = new Set(options.overriddenPaths ?? []);
   const included: IncludedFile[] = [];

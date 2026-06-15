@@ -122,13 +122,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('aiHandoff.generateFromExplorer', async (
       ...args: unknown[]
     ) => {
-      const paths = collectExplorerPaths(args, workspaceRoot);
-      if (paths.length === 0) {
+      const files = collectExplorerFiles(args);
+      if (files.length === 0) {
         vscode.window.showWarningMessage('AI Handoff: no files selected.');
         return;
       }
-      await treeProvider.setSelection(paths);
-      await runGenerate(treeProvider, actionPanel, session, workspaceRoot);
+      // Use the primary workspace root for .gitignore / tree label context.
+      // Each SelectedFile already carries the correct absolutePath regardless
+      // of which workspace folder it belongs to.
+      const root = workspaceRoot ?? files[0].absolutePath;
+      await doGenerateAndDispatch(files, actionPanel, session, root);
     }),
     vscode.commands.registerCommand('aiHandoff.generateFromPanel', async () => {
       await runGenerate(treeProvider, actionPanel, session, workspaceRoot);
@@ -319,32 +322,17 @@ async function refreshPanel(
 }
 
 /**
- * Generate the handoff for the current selection and dispatch to the
- * user's chosen destination(s).
+ * Core generate+dispatch pipeline. Called by both the panel button and the
+ * Explorer right-click handler so the logic lives in one place.
  */
-async function runGenerate(
-  treeProvider: FileTreeProvider,
+async function doGenerateAndDispatch(
+  selectedFiles: SelectedFile[],
   panel: ActionPanelProvider,
   session: SessionState,
-  workspaceRoot: string | undefined,
+  workspaceRoot: string,
 ): Promise<void> {
-  if (!workspaceRoot) {
-    panel.showError('No workspace folder is open.');
-    return;
-  }
-
-  const selection = treeProvider.getSelection();
-  if (selection.length === 0) {
-    panel.showError('Select at least one file before generating.');
-    return;
-  }
-
   panel.setBusy(true);
   try {
-    const selectedFiles: SelectedFile[] = selection.map((rel) => ({
-      relativePath: rel,
-      absolutePath: path.join(workspaceRoot, rel),
-    }));
     const opts = getHandoffOptions(session);
     const result = await generateHandoff(selectedFiles, opts, workspaceRoot);
 
@@ -377,7 +365,6 @@ async function runGenerate(
       messages.join('. ');
     vscode.window.showInformationMessage(summary);
 
-    // Refresh panel to show updated skipped list
     session.lastSkipped = result.skipped.map((s) => ({
       relativePath: s.relativePath,
       reason: s.reason,
@@ -393,6 +380,34 @@ async function runGenerate(
   } finally {
     panel.setBusy(false);
   }
+}
+
+/**
+ * Generate the handoff for the sidebar tree selection and dispatch it.
+ */
+async function runGenerate(
+  treeProvider: FileTreeProvider,
+  panel: ActionPanelProvider,
+  session: SessionState,
+  workspaceRoot: string | undefined,
+): Promise<void> {
+  if (!workspaceRoot) {
+    panel.showError('No workspace folder is open.');
+    return;
+  }
+
+  const selection = treeProvider.getSelection();
+  if (selection.length === 0) {
+    panel.showError('Select at least one file before generating.');
+    return;
+  }
+
+  const selectedFiles: SelectedFile[] = selection.map((rel) => ({
+    relativePath: rel,
+    absolutePath: path.join(workspaceRoot, rel),
+  }));
+
+  await doGenerateAndDispatch(selectedFiles, panel, session, workspaceRoot);
 }
 
 /**
@@ -419,18 +434,16 @@ function tryGetFsPath(u: unknown): string | undefined {
 }
 
 /**
- * Extract file/folder paths from the explorer right-click context.
+ * Build a SelectedFile list from the Explorer right-click context args.
  *
- * VS Code passes arg0 = clicked Uri, arg1 = selection array, but the
- * exact shape varies: Uri instances vs plain serialised objects. We flatten
- * all args and use tryGetFsPath() to cope with either representation.
+ * VS Code passes arg0 = clicked Uri, arg1 = selection array, but the shape
+ * varies (Uri instances vs plain serialised objects). We flatten all args,
+ * use tryGetFsPath() to extract the filesystem path from either form, and
+ * then use vscode.workspace.getWorkspaceFolder() to compute the correct
+ * relative path for each file regardless of which workspace folder it lives in.
  */
-function collectExplorerPaths(args: unknown[], workspaceRoot: string | undefined): string[] {
-  if (!workspaceRoot) {
-    return [];
-  }
-
-  // Flatten: handle both (uri, uriArray) and edge cases where arg order differs.
+function collectExplorerFiles(args: unknown[]): SelectedFile[] {
+  // Flatten: handles both (uri, uriArray) and any variation in arg order.
   const raw: unknown[] = [];
   for (const arg of args) {
     if (Array.isArray(arg)) {
@@ -441,24 +454,30 @@ function collectExplorerPaths(args: unknown[], workspaceRoot: string | undefined
   }
 
   const seen = new Set<string>();
-  const result: string[] = [];
+  const result: SelectedFile[] = [];
   for (const r of raw) {
-    const fsPath = tryGetFsPath(r);
-    if (!fsPath) {
+    const absolutePath = tryGetFsPath(r);
+    if (!absolutePath || seen.has(absolutePath)) {
       continue;
     }
-    const rel = path
-      .relative(workspaceRoot, fsPath)
+    seen.add(absolutePath);
+
+    // Find the workspace folder that owns this file.
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(absolutePath));
+    if (!folder) {
+      continue; // Outside all workspace folders — skip.
+    }
+
+    const relativePath = path
+      .relative(folder.uri.fsPath, absolutePath)
       .split(path.sep)
       .join('/');
-    // Empty string = workspace root itself; '..' prefix = outside workspace.
-    if (!rel || rel.startsWith('..')) {
+
+    if (!relativePath || relativePath.startsWith('..')) {
       continue;
     }
-    if (!seen.has(rel)) {
-      seen.add(rel);
-      result.push(rel);
-    }
+
+    result.push({ relativePath, absolutePath });
   }
   return result;
 }
