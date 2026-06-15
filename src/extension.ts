@@ -396,34 +396,62 @@ async function runGenerate(
 }
 
 /**
- * Extract file/folder URIs from the explorer right-click context.
- * VS Code passes either a single Uri or a Uri + array of selected Uris.
+ * Return the filesystem path from a value that is either a proper vscode.Uri
+ * or a plain serialised URI object ({ scheme, path, ... }) that VS Code can
+ * pass before the extension host has revived it into a Uri instance.
+ * Returns undefined if the value is not a file:// URI-like object.
+ */
+function tryGetFsPath(u: unknown): string | undefined {
+  if (!u || typeof u !== 'object') {
+    return undefined;
+  }
+  const o = u as Record<string, unknown>;
+  // Proper vscode.Uri — fsPath is a computed string property on the instance.
+  if (typeof o.fsPath === 'string') {
+    return o.fsPath;
+  }
+  // Plain serialised object ({ $mid, scheme, path, ... }) — fsPath not yet
+  // computed. On macOS/Linux the 'path' component equals fsPath for file URIs.
+  if (o.scheme === 'file' && typeof o.path === 'string') {
+    return o.path;
+  }
+  return undefined;
+}
+
+/**
+ * Extract file/folder paths from the explorer right-click context.
+ *
+ * VS Code passes arg0 = clicked Uri, arg1 = selection array, but the
+ * exact shape varies: Uri instances vs plain serialised objects. We flatten
+ * all args and use tryGetFsPath() to cope with either representation.
  */
 function collectExplorerPaths(args: unknown[], workspaceRoot: string | undefined): string[] {
   if (!workspaceRoot) {
     return [];
   }
-  const uris: vscode.Uri[] = [];
-  // arg 0 is the clicked Uri; arg 1 is the multi-select array (if any).
-  if (args[0] && typeof args[0] === 'object' && 'fsPath' in (args[0] as object)) {
-    uris.push(args[0] as vscode.Uri);
-  }
-  if (Array.isArray(args[1])) {
-    for (const u of args[1]) {
-      if (u && typeof u === 'object' && 'fsPath' in u) {
-        uris.push(u as vscode.Uri);
-      }
+
+  // Flatten: handle both (uri, uriArray) and edge cases where arg order differs.
+  const raw: unknown[] = [];
+  for (const arg of args) {
+    if (Array.isArray(arg)) {
+      raw.push(...arg);
+    } else if (arg) {
+      raw.push(arg);
     }
   }
-  // Dedupe and convert to POSIX-relative.
+
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const u of uris) {
+  for (const r of raw) {
+    const fsPath = tryGetFsPath(r);
+    if (!fsPath) {
+      continue;
+    }
     const rel = path
-      .relative(workspaceRoot, u.fsPath)
+      .relative(workspaceRoot, fsPath)
       .split(path.sep)
       .join('/');
-    // Empty string means the URI is the workspace root; '..' means outside.
+    // Empty string = workspace root itself; '..' prefix = outside workspace.
     if (!rel || rel.startsWith('..')) {
       continue;
     }
