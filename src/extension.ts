@@ -419,15 +419,15 @@ function collectExplorerPaths(args: unknown[], workspaceRoot: string | undefined
   const seen = new Set<string>();
   const result: string[] = [];
   for (const u of uris) {
-    const abs = u.fsPath;
-    if (!abs.startsWith(workspaceRoot)) {
-      continue;
-    }
     const rel = path
-      .relative(workspaceRoot, abs)
+      .relative(workspaceRoot, u.fsPath)
       .split(path.sep)
       .join('/');
-    if (rel && !seen.has(rel)) {
+    // Empty string means the URI is the workspace root; '..' means outside.
+    if (!rel || rel.startsWith('..')) {
+      continue;
+    }
+    if (!seen.has(rel)) {
       seen.add(rel);
       result.push(rel);
     }
