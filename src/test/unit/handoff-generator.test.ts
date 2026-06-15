@@ -235,4 +235,48 @@ describe('generateHandoff — pipeline', () => {
     const paths = result.included.map((f) => f.relativePath).sort();
     expect(paths).to.deep.equal(['README.md', 'src/auth/login.ts']);
   });
+
+  // ---- Multi-root workspace (Bug 3 fix) --------------------------------
+
+  it('includes files whose absolutePath is outside workspaceRoot (multi-root)', async () => {
+    // Simulate a second workspace folder (root-b) that is a sibling of root.
+    const rootB = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-root-b-'));
+    try {
+      await fs.writeFile(path.join(rootB, 'helper.ts'), 'export const h = 2;');
+
+      // SelectedFile has relativePath relative to rootB, absolutePath in rootB.
+      // workspaceRoot is still root (folder[0]) — simulating multi-root workspace.
+      const result = await generateHandoff(
+        [{ relativePath: 'helper.ts', absolutePath: path.join(rootB, 'helper.ts') }],
+        { ...baseOpts, smartFilter: false },
+        root,
+      );
+      expect(result.included).to.have.lengthOf(1);
+      expect(result.included[0].relativePath).to.equal('helper.ts');
+      expect(result.included[0].absolutePath).to.equal(path.join(rootB, 'helper.ts'));
+    } finally {
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
+
+  it('expands a directory from a non-primary workspace folder correctly', async () => {
+    // Same setup: rootB is a second workspace folder with its own src/ dir.
+    const rootB = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-root-b-'));
+    try {
+      await fs.mkdir(path.join(rootB, 'src'));
+      await fs.writeFile(path.join(rootB, 'src', 'util.ts'), 'export const u = 3;');
+
+      // Select the src/ directory from rootB — relativePath relative to rootB.
+      const result = await generateHandoff(
+        [{ relativePath: 'src', absolutePath: path.join(rootB, 'src') }],
+        { ...baseOpts, smartFilter: false },
+        root, // primary workspace root is still root (folder[0])
+      );
+      // Child paths must be 'src/util.ts', not '../../rootB/src/util.ts'.
+      expect(result.included).to.have.lengthOf(1);
+      expect(result.included[0].relativePath).to.equal('src/util.ts');
+    } finally {
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
 });
