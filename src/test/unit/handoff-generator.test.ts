@@ -259,6 +259,33 @@ describe('generateHandoff — pipeline', () => {
     }
   });
 
+  it('prefixes file paths with folder name when files span multiple workspace folders', async () => {
+    const rootB = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-root-b-'));
+    try {
+      await fs.writeFile(path.join(rootB, 'helper.ts'), 'export const h = 2;');
+
+      const result = await generateHandoff(
+        [
+          { relativePath: 'src/index.ts', absolutePath: path.join(root, 'src', 'index.ts') },
+          { relativePath: 'helper.ts', absolutePath: path.join(rootB, 'helper.ts') },
+        ],
+        { ...baseOpts, smartFilter: false },
+        root,
+      );
+
+      const rootName = path.basename(root);
+      const rootBName = path.basename(rootB);
+
+      expect(result.included).to.have.lengthOf(2);
+      // The generated text should use prefixed paths and a 'workspace' root label.
+      expect(result.text).to.include('workspace/');
+      expect(result.text).to.include(`${rootName}/src/index.ts`);
+      expect(result.text).to.include(`${rootBName}/helper.ts`);
+    } finally {
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
+
   it('expands a directory from a non-primary workspace folder correctly', async () => {
     // Same setup: rootB is a second workspace folder with its own src/ dir.
     const rootB = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-root-b-'));

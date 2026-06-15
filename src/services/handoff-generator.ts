@@ -195,13 +195,41 @@ export async function generateHandoff(
     a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0,
   );
 
-  const rootLabel = path.basename(workspaceRoot) || 'workspace';
+  // Detect multi-root: infer each file's workspace folder root from its
+  // absolutePath + relativePath, then check whether more than one root is
+  // present among the included files.
+  //
+  // For a file { relativePath: 'src/index.ts', absolutePath: '/root/src/index.ts' }
+  // the folder root is path.resolve('/root/src/index.ts', '../../') = '/root'.
+  function inferFolderRoot(f: { relativePath: string; absolutePath: string }): string {
+    const depth = f.relativePath.split('/').length;
+    return path.resolve(f.absolutePath, '../'.repeat(depth));
+  }
+
+  const folderRoots = new Set(included.map(inferFolderRoot));
+  const multiRoot = folderRoots.size > 1;
+
+  // When spanning multiple workspace folders, prefix each file's display path
+  // with its folder name so the tree correctly shows e.g.:
+  //   workspace/
+  //   ├── ai-handoff/
+  //   │   └── esbuild.js
+  //   └── buzzer/
+  //       └── project.yml
+  const displayFiles = multiRoot
+    ? included.map((f) => ({
+        ...f,
+        relativePath: `${path.basename(inferFolderRoot(f))}/${f.relativePath}`,
+      }))
+    : included;
+
+  const rootLabel = multiRoot ? 'workspace' : (path.basename(workspaceRoot) || 'workspace');
   const treeSection = buildTreeForFormat(
-    included.map((f) => f.relativePath),
+    displayFiles.map((f) => f.relativePath),
     options.format,
     { rootLabel },
   );
-  const text = formatHandoff(included, {
+  const text = formatHandoff(displayFiles, {
     format: options.format,
     includeLineNumbers: options.includeLineNumbers,
     treeSection,
