@@ -1,0 +1,29 @@
+# Source & build tools — only dist/ ships
+src/
+out/
+esbuild.js
+tsconfig.json
+tsconfig.test.json
+.eslintrc.json
+
+# Dev / repo housekeeping
+.gitignore
+.gitattributes
+setup-github.sh
+CLAUDE.md
+CONTRIBUTING.md
+NEXT-STEPS.md
+
+# Test artifacts
+*.xml
+*.vsix
+coverage/
+.nyc_output/
+
+# Dependencies (extension is bundled via esbuild)
+node_modules/
+
+# Misc
+.DS_Store
+*.log
+.claude/

@@ -90,6 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
     switch (msg.type) {
       case 'ready':
         await refreshPanel(treeProvider, actionPanel, session, workspaceRoot);
+        actionPanel.postBookmarks(store.listNamedSets());
         break;
       case 'formatChange':
         session.currentFormat = msg.format;
@@ -113,6 +114,57 @@ export function activate(context: vscode.ExtensionContext): void {
       case 'showAll':
         // Future: support paginated skipped lists
         break;
+      case 'saveBookmark': {
+        const current = treeProvider.getSelection();
+        if (current.length === 0) {
+          vscode.window.showWarningMessage('AI Handoff: nothing to bookmark (no files selected).');
+          break;
+        }
+        const name = await vscode.window.showInputBox({
+          prompt: 'Name for this bookmark',
+          placeHolder: 'e.g. "Auth module" or "API layer"',
+          validateInput: (v) => (v.trim().length === 0 ? 'Name cannot be empty' : null),
+        });
+        if (!name) {
+          break;
+        }
+        const existing = store.getNamedSet(name);
+        if (existing) {
+          const confirm = await vscode.window.showWarningMessage(
+            `AI Handoff: "${name}" already exists. Overwrite?`,
+            { modal: true },
+            'Overwrite',
+          );
+          if (confirm !== 'Overwrite') {
+            break;
+          }
+        }
+        await store.saveNamedSet(name, current);
+        vscode.window.showInformationMessage(`AI Handoff: bookmark "${name}" saved (${current.length} files).`);
+        actionPanel.postBookmarks(store.listNamedSets());
+        break;
+      }
+      case 'loadBookmark': {
+        const paths = store.getNamedSet(msg.name) ?? [];
+        await treeProvider.setSelection(paths);
+        break;
+      }
+      case 'overrideBookmark': {
+        const current = treeProvider.getSelection();
+        if (current.length === 0) {
+          vscode.window.showWarningMessage('AI Handoff: nothing to override with (no files selected).');
+          break;
+        }
+        await store.saveNamedSet(msg.name, current);
+        vscode.window.showInformationMessage(`AI Handoff: bookmark "${msg.name}" updated (${current.length} files).`);
+        actionPanel.postBookmarks(store.listNamedSets());
+        break;
+      }
+      case 'deleteBookmark': {
+        await store.deleteNamedSet(msg.name);
+        actionPanel.postBookmarks(store.listNamedSets());
+        break;
+      }
     }
   });
 

@@ -44,7 +44,19 @@ export type FromWebviewMessage =
   | { type: 'formatChange'; format: OutputFormat }
   | { type: 'instructionsChange'; text: string }
   | { type: 'overrideFile'; path: string }
-  | { type: 'showAll' }; // expand skipped list
+  | { type: 'showAll' } // expand skipped list
+  | { type: 'saveBookmark' }
+  | { type: 'loadBookmark'; name: string }
+  | { type: 'overrideBookmark'; name: string }
+  | { type: 'deleteBookmark'; name: string };
+
+/**
+ * A bookmark shown in the panel's bookmarks list.
+ */
+export interface PanelBookmark {
+  name: string;
+  fileCount: number;
+}
 
 /**
  * Messages from extension host to webview.
@@ -59,7 +71,8 @@ export type ToWebviewMessage =
       skipped: PanelSkippedFile[];
     }
   | { type: 'generating'; busy: boolean }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'bookmarks'; items: PanelBookmark[] };
 
 /**
  * The provider. Registered against the "aiHandoff.actionPanel" view ID.
@@ -112,6 +125,15 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
   /** Show a transient error in the panel. */
   showError(message: string): void {
     this.post({ type: 'error', message });
+  }
+
+  /** Push the current bookmark list to the webview. */
+  postBookmarks(sets: Record<string, string[]>): void {
+    const items: PanelBookmark[] = Object.entries(sets).map(([name, paths]) => ({
+      name,
+      fileCount: paths.length,
+    }));
+    this.post({ type: 'bookmarks', items });
   }
 
   private post(message: ToWebviewMessage): void {
@@ -204,6 +226,54 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
     button.primary:hover { background: var(--vscode-button-hoverBackground); }
     button.primary:disabled { opacity: 0.5; cursor: default; }
 
+    button.secondary {
+      width: 100%;
+      margin-top: 6px;
+      padding: 4px 10px;
+      background: var(--vscode-button-secondaryBackground, transparent);
+      color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+      border: 1px solid var(--vscode-button-background);
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      cursor: pointer;
+    }
+    button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-editor-inactiveSelectionBackground)); }
+
+    .bookmarks {
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+    }
+    .bookmarks h4 {
+      margin: 0 0 6px;
+      font-size: var(--vscode-font-size);
+      font-weight: 600;
+      opacity: 0.8;
+    }
+    .bookmarks ul { list-style: none; padding: 0; margin: 0; }
+    .bookmarks li {
+      padding: 2px 0;
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+      font-size: 0.9em;
+    }
+    .bk-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .bk-count { opacity: 0.55; font-size: 0.85em; flex-shrink: 0; }
+    a.bk-action {
+      color: var(--vscode-textLink-foreground);
+      text-decoration: none;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    a.bk-action:hover { text-decoration: underline; }
+
     .skipped {
       margin-top: 14px;
       padding-top: 10px;
@@ -275,8 +345,15 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
   </div>
 
   <button class="primary" id="generate">Generate Handoff</button>
+  <button class="secondary" id="bookmark-save">Save as Bookmark</button>
 
   <div id="error" class="error hidden"></div>
+
+  <div class="bookmarks">
+    <h4>Bookmarks</h4>
+    <div class="skipped-empty" id="bookmarks-empty">No bookmarks saved yet.</div>
+    <ul id="bookmark-list"></ul>
+  </div>
 
   <div class="skipped">
     <h4>Skipped files (<span id="skip-count">0</span>)</h4>
@@ -293,6 +370,9 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
     const $insWrap = document.getElementById('instructions-wrap');
     const $ins = document.getElementById('instructions');
     const $btn = document.getElementById('generate');
+    const $bookmarkSave = document.getElementById('bookmark-save');
+    const $bookmarksEmpty = document.getElementById('bookmarks-empty');
+    const $bookmarkList = document.getElementById('bookmark-list');
     const $err = document.getElementById('error');
     const $skipCount = document.getElementById('skip-count');
     const $skipEmpty = document.getElementById('skip-empty');
@@ -312,6 +392,57 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
     $btn.addEventListener('click', () => {
       vscode.postMessage({ type: 'generate' });
     });
+    $bookmarkSave.addEventListener('click', () => {
+      vscode.postMessage({ type: 'saveBookmark' });
+    });
+
+    function renderBookmarks(items) {
+      $bookmarkList.innerHTML = '';
+      if (items.length === 0) {
+        $bookmarksEmpty.classList.remove('hidden');
+        return;
+      }
+      $bookmarksEmpty.classList.add('hidden');
+      for (const item of items) {
+        const li = document.createElement('li');
+
+        const name = document.createElement('span');
+        name.className = 'bk-name';
+        name.textContent = item.name;
+        name.title = item.name;
+
+        const count = document.createElement('span');
+        count.className = 'bk-count';
+        count.textContent = '(' + item.fileCount + ')';
+
+        const load = document.createElement('a');
+        load.className = 'bk-action';
+        load.textContent = '[load]';
+        load.addEventListener('click', (e) => {
+          e.preventDefault();
+          vscode.postMessage({ type: 'loadBookmark', name: item.name });
+        });
+
+        const override = document.createElement('a');
+        override.className = 'bk-action';
+        override.textContent = '[override]';
+        override.addEventListener('click', (e) => {
+          e.preventDefault();
+          vscode.postMessage({ type: 'overrideBookmark', name: item.name });
+        });
+
+        const del = document.createElement('a');
+        del.className = 'bk-action';
+        del.textContent = '[delete]';
+        del.addEventListener('click', (e) => {
+          e.preventDefault();
+          vscode.postMessage({ type: 'deleteBookmark', name: item.name });
+        });
+
+        li.append(name, count, load, override, del);
+        $bookmarkList.appendChild(li);
+      }
+    }
 
     function renderSkipped(items) {
       $skipCount.textContent = items.length;
@@ -362,6 +493,9 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
           }
           renderSkipped(msg.skipped);
           $err.classList.add('hidden');
+          break;
+        case 'bookmarks':
+          renderBookmarks(msg.items);
           break;
         case 'generating':
           $btn.disabled = msg.busy;

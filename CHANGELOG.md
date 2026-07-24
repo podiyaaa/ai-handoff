@@ -5,6 +5,17 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] — 2026-07-24
+
+### Added
+
+- **Bookmarks** — save any file selection as a named bookmark directly from the action panel. Each bookmark appears in a new "Bookmarks" list with `[load]`, `[override]`, and `[delete]` actions:
+  - **Load** restores the bookmark's file selection to the sidebar tree.
+  - **Override** replaces the bookmark's stored paths with the current selection.
+  - **Delete** removes the bookmark.
+  - Saving with an existing name prompts for confirmation before overwriting.
+  - Bookmarks persist across sessions via `workspaceState` (same storage as named selection sets).
+
 ## [0.1.7] — 2026-06-16
 
 ### Fixed
