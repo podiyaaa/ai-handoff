@@ -12,6 +12,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { formatBytes } from './core/filter';
+import { parseSearchQuery } from './core/search-filter';
 import { formatTokenCount } from './core/token-estimator';
 import type {
   HandoffOptions,
@@ -22,8 +23,9 @@ import type {
 import { generateHandoff } from './services/handoff-generator';
 import { SelectionStore } from './services/selection-store';
 import { ActionPanelProvider, formatStatsForPanel } from './ui/action-panel';
-import { FileTreeProvider } from './ui/file-tree-provider';
+import { FileTreeItem, FileTreeProvider } from './ui/file-tree-provider';
 import { dispatchHandoff, pickDestinations } from './ui/output-picker';
+import { SearchBarProvider } from './ui/search-bar-panel';
 
 // In-memory transient state — not persisted, lives for the session
 interface SessionState {
@@ -63,12 +65,106 @@ export function activate(context: vscode.ExtensionContext): void {
   const treeProvider = new FileTreeProvider(vscode.workspace.workspaceFolders, initialSelection);
   const treeView = vscode.window.createTreeView('aiHandoff.fileTree', {
     treeDataProvider: treeProvider,
-    showCollapseAll: true,
+    // We provide our own single Collapse All / Expand All toggle (below)
+    // instead of the native non-toggling button.
+    showCollapseAll: false,
     canSelectMany: false,
   });
+  // The tree starts fully collapsed (no auto-expand-on-startup), so the
+  // toggle button should start showing "Expand All" — the only meaningful
+  // first action — rather than defaulting to "Collapse All" just because
+  // the context key is unset (which the view/title `when` clause reads as
+  // "not collapsed", regardless of the tree's actual initial state).
+  void vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', true);
   // Native checkbox events
   treeView.onDidChangeCheckboxState(async (e) => {
     await treeProvider.handleCheckboxChange(e.items);
+  });
+
+  // Serializes revealAllDirectories calls: a full-tree walk (e.g. after
+  // clearing a search) has real UI latency per reveal() call, so it isn't
+  // instant. If another search change arrives while a walk is still
+  // running, two overlapping walks would both be calling reveal() against
+  // the same tree at once — coalesce instead: note that another pass is
+  // needed and run exactly one more once the current walk finishes,
+  // reflecting whatever the search state is by then (rather than queueing
+  // every intermediate request, which could pile up under rapid typing).
+  let revealInFlight: Thenable<void> | undefined;
+  let revealAgainRequested = false;
+  async function requestRevealAllDirectories(): Promise<void> {
+    if (revealInFlight) {
+      revealAgainRequested = true;
+      return;
+    }
+    revealAgainRequested = false;
+    revealInFlight = vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: 'AI Handoff: expanding folders…' },
+      () => revealAllDirectories(treeProvider, treeView),
+    );
+    try {
+      await revealInFlight;
+      // Whatever triggered this (search or the Expand All button), things
+      // are now expanded — show "Collapse All" as the next available action.
+      await vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', false);
+    } finally {
+      revealInFlight = undefined;
+      if (revealAgainRequested) {
+        await requestRevealAllDirectories();
+      }
+    }
+  }
+
+  // -- Search bar (pinned above the Files tree) --
+  const searchBar = new SearchBarProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(SearchBarProvider.viewType, searchBar, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
+  searchBar.onDidReceive(async (msg) => {
+    if (msg.type !== 'queryChange') {
+      return;
+    }
+    const { query, error } = parseSearchQuery(msg.text);
+    // On an invalid query (e.g. an unterminated regex while still typing),
+    // surface the error inline and leave the last valid filter in place
+    // rather than flashing the tree back to fully unfiltered every keystroke.
+    searchBar.setError(error);
+    if (error) {
+      return;
+    }
+    treeProvider.setSearchQuery(query);
+    // Reveal every directory getChildren() currently returns — while a
+    // search is active that's just the matches (non-matching directories
+    // are already excluded), and once the search is cleared it's the whole
+    // tree, so clearing shows everything expanded rather than snapping back
+    // to whatever collapsed state existed before. This always wins over any
+    // prior manual "Collapse All" — reveal() forces a directory open
+    // regardless of its current state — and nothing here ever collapses
+    // anything; only an explicit user action (the disclosure arrow or
+    // "Collapse All") does that.
+    //
+    // An earlier investigation wrongly suspected this (and, before it, an
+    // id-churn approach) of causing checkbox clicks to get misrouted to the
+    // wrong node. The actual cause — confirmed via debug logging — was
+    // unrelated: handleCheckboxChange was treating every ancestor directory
+    // VS Code auto-includes in a checkbox-change batch (to keep ancestor
+    // checkboxes visually in sync) as an independent user action, bulk-
+    // selecting whole folders instead of just the clicked file. That's now
+    // fixed at the source (see handleCheckboxChange), so reveal() here is
+    // safe.
+    //
+    // setSearchQuery() above fires _onDidChangeTreeData synchronously, but
+    // that only *notifies* VS Code's tree widget to refresh — there's no way
+    // to await the widget actually having processed it and re-fetched
+    // children internally before we call reveal() below. Confirmed by
+    // debug-log timing: every reveal() call here completes in well under a
+    // second with no errors, yet the visual result was still inconsistent —
+    // consistent with our reveal() calls racing ahead of VS Code's own
+    // internal refresh handling rather than any bug in this code. A short
+    // delay lets that settle first.
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    await requestRevealAllDirectories();
   });
 
   // -- Action panel --
@@ -78,6 +174,20 @@ export function activate(context: vscode.ExtensionContext): void {
       webviewOptions: { retainContextWhenHidden: true },
     }),
   );
+
+  // -- Ticking one specific file's checkbox is a deliberate "include this
+  // exact file" action (e.g. after finding it via search), so auto-register
+  // it as a filter override — unlike ticking a whole folder, which stays
+  // subject to the smart filter/gitignore so bulk-selecting a folder can't
+  // accidentally drag in its node_modules. Runs synchronously so the
+  // override is applied before onDidChangeSelection recomputes stats below.
+  treeProvider.onDidToggleIndividualFile(({ relativePath, checked }) => {
+    if (checked) {
+      session.overriddenPaths.add(relativePath);
+    } else {
+      session.overriddenPaths.delete(relativePath);
+    }
+  });
 
   // -- React to selection changes by updating the panel stats --
   treeProvider.onDidChangeSelection(async (selected) => {
@@ -193,6 +303,21 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('aiHandoff.refreshTree', () => {
       treeProvider.refresh();
     }),
+    vscode.commands.registerCommand('aiHandoff.expandAllFiles', async () => {
+      await requestRevealAllDirectories();
+    }),
+    vscode.commands.registerCommand('aiHandoff.collapseAllFiles', async () => {
+      // The same internal command the native "Collapse All" button uses.
+      // Undocumented VS Code internals, so guard against it disappearing in
+      // some future VS Code version rather than throwing an unhandled
+      // rejection.
+      try {
+        await vscode.commands.executeCommand('workbench.actions.treeView.aiHandoff.fileTree.collapseAll');
+      } catch (e) {
+        console.error('[AI Handoff] collapseAll command failed:', e);
+      }
+      await vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', true);
+    }),
     vscode.commands.registerCommand('aiHandoff.clearSelection', async () => {
       await treeProvider.clearSelection();
       session.overriddenPaths.clear();
@@ -299,6 +424,47 @@ function enforceOffline(): void {
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
+
+/**
+ * Force every directory currently returned by getChildren() open, via
+ * TreeView.reveal() (the documented API for this) rather than any item-
+ * identity trick — so it can't interfere with an in-flight checkbox click.
+ * Under an active search, getChildren() already excludes non-matching
+ * directories, so this only reveals matches; with no search, it walks (and
+ * opens) the whole tree — used by both "Expand All" and search-triggered
+ * auto-expand.
+ *
+ * A single reveal() (or getChildren()) failure must not abort revealing
+ * everything else — this is a recursive, sibling-by-sibling walk, and an
+ * uncaught rejection partway through would silently stop processing every
+ * directory after the failure point (e.g. a failure inside one top-level
+ * folder's subtree would prevent a later sibling folder from ever being
+ * revealed at all). Every step is wrapped so one bad node is logged and
+ * skipped rather than derailing the rest of the walk.
+ */
+async function revealAllDirectories(
+  treeProvider: FileTreeProvider,
+  treeView: vscode.TreeView<FileTreeItem>,
+  parent?: FileTreeItem,
+): Promise<void> {
+  let children: FileTreeItem[];
+  try {
+    children = await treeProvider.getChildren(parent);
+  } catch {
+    return;
+  }
+  for (const child of children) {
+    if (child.data.isDirectory) {
+      try {
+        await treeView.reveal(child, { expand: true, select: false, focus: false });
+      } catch {
+        // A single directory failing to reveal must not abort the rest of
+        // the walk — continue recursing into it and on to its siblings.
+      }
+      await revealAllDirectories(treeProvider, treeView, child);
+    }
+  }
+}
 
 function getWorkspaceRoot(): string | undefined {
   const folders = vscode.workspace.workspaceFolders;

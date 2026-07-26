@@ -5,6 +5,22 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Search/filter bar above the sidebar file tree** — a persistent search box (its own small panel, pinned directly above the Files tree) filters the tree down to matching files as you type. Supports three modes: plain text (substring match against the path), `ext:ts,tsx` (match by extension), and `re:^use[A-Z]` (regex, case-insensitive), with an inline error hint for invalid input and a clear (✕) button while the box has text. Directories containing a match expand automatically once a search settles — including ones you'd already collapsed by hand — via `TreeView.reveal()` + a new `FileTreeProvider.getParent()`. Purely a display filter — it never changes what's selected. A status-bar spinner shows while a search (or Expand All) is actively revealing folders.
+- **Single Expand All / Collapse All toggle** — one button in the Files view title bar that alternates between the two, instead of two separate always-visible buttons.
+
+### Changed
+
+- **Search bar visual polish** — the search panel's background matches the Files tree right below it, content is vertically centered, and the "ext:/re:" hint line only appears while the box is focused or has text — so at rest it reads as a single compact row instead of a mostly-empty panel.
+- **File overrides** — ticking an individual file's own checkbox in the sidebar (e.g. after finding it via search) now auto-registers it as a filter override, same as clicking "include anyway" in the skipped-files list — so a file you deliberately searched for and checked (even inside `dist/` or `node_modules/`) no longer silently vanishes from the generated handoff. Ticking a whole *directory's* checkbox is unaffected — bulk-selecting a folder still respects the smart filter/gitignore, so it can't accidentally drag in its `node_modules`.
+
+### Fixed
+
+- **Ticking one file's checkbox could select its entire parent folder** — VS Code's native tree checkbox feature auto-includes every ancestor directory in the same checkbox-change event, marking them "checked" too, to keep ancestor checkboxes visually in sync. `handleCheckboxChange` was treating every entry in that batch as an independent user action, so those auto-included ancestors triggered full recursive bulk-selects nobody asked for — the deeper the checked file, the more ancestor folders got swept in. Fixed by only acting on the one item in a batch that isn't an ancestor of any other item in the same batch; everything else is VS Code's sync notification, not a click, and is now ignored.
+
 ## [0.1.9] — 2026-07-26
 
 ### Fixed
