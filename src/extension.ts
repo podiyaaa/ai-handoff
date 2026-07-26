@@ -156,6 +156,17 @@ export function activate(context: vscode.ExtensionContext): void {
     // selecting whole folders instead of just the clicked file. That's now
     // fixed at the source (see handleCheckboxChange), so reveal() here is
     // safe.
+    //
+    // setSearchQuery() above fires _onDidChangeTreeData synchronously, but
+    // that only *notifies* VS Code's tree widget to refresh — there's no way
+    // to await the widget actually having processed it and re-fetched
+    // children internally before we call reveal() below. Confirmed by
+    // debug-log timing: every reveal() call here completes in well under a
+    // second with no errors, yet the visual result was still inconsistent —
+    // consistent with our reveal() calls racing ahead of VS Code's own
+    // internal refresh handling rather than any bug in this code. A short
+    // delay lets that settle first.
+    await new Promise((resolve) => setTimeout(resolve, 75));
     await requestRevealAllDirectories();
   });
 
