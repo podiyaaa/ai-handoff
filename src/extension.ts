@@ -80,6 +80,12 @@ export function activate(context: vscode.ExtensionContext): void {
     showCollapseAll: false,
     canSelectMany: false,
   });
+  // The tree starts fully collapsed (no auto-expand-on-startup), so the
+  // toggle button should start showing "Expand All" — the only meaningful
+  // first action — rather than defaulting to "Collapse All" just because
+  // the context key is unset (which the view/title `when` clause reads as
+  // "not collapsed", regardless of the tree's actual initial state).
+  void vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', true);
   // Native checkbox events
   treeView.onDidChangeCheckboxState(async (e) => {
     await treeProvider.handleCheckboxChange(e.items);
