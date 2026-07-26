@@ -132,32 +132,6 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
-  // Expand every folder once per window, the first time the Files view
-  // actually becomes visible (not unconditionally at activation — the
-  // sidebar may not be open yet, and revealing a hidden tree wouldn't do
-  // anything). A short delay first, same reasoning as the search-triggered
-  // reveal: the view needs a moment to finish its own initial render before
-  // our reveal() calls can reliably act on it.
-  let hasAutoExpandedOnce = false;
-  const autoExpandOnceVisible = async (): Promise<void> => {
-    if (hasAutoExpandedOnce) {
-      return;
-    }
-    hasAutoExpandedOnce = true;
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    await requestRevealAllDirectories();
-  };
-  context.subscriptions.push(
-    treeView.onDidChangeVisibility((e) => {
-      if (e.visible) {
-        void autoExpandOnceVisible();
-      }
-    }),
-  );
-  if (treeView.visible) {
-    void autoExpandOnceVisible();
-  }
-
   // -- Search bar (pinned above the Files tree) --
   const searchBar = new SearchBarProvider(context.extensionUri);
   context.subscriptions.push(
