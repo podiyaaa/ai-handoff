@@ -58,7 +58,9 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   // -- Tree provider --
-  const treeProvider = new FileTreeProvider(workspaceRoot, initialSelection);
+  // Pass every workspace folder (not just the first) so multi-root
+  // workspaces can select files from all of them, not just folders[0].
+  const treeProvider = new FileTreeProvider(vscode.workspace.workspaceFolders, initialSelection);
   const treeView = vscode.window.createTreeView('aiHandoff.fileTree', {
     treeDataProvider: treeProvider,
     showCollapseAll: true,
@@ -350,10 +352,12 @@ async function refreshPanel(
   }
 
   const selection = treeProvider.getSelection();
-  const selectedFiles: SelectedFile[] = selection.map((rel) => ({
-    relativePath: rel,
-    absolutePath: path.join(workspaceRoot, rel),
-  }));
+  const selectedFiles: SelectedFile[] = selection
+    .map((rel) => {
+      const absolutePath = treeProvider.resolveAbsolutePath(rel);
+      return absolutePath ? { relativePath: rel, absolutePath } : undefined;
+    })
+    .filter((f): f is SelectedFile => f !== undefined);
 
   const opts = getHandoffOptions(session);
   const result = await generateHandoff(selectedFiles, opts, workspaceRoot);
@@ -454,10 +458,12 @@ async function runGenerate(
     return;
   }
 
-  const selectedFiles: SelectedFile[] = selection.map((rel) => ({
-    relativePath: rel,
-    absolutePath: path.join(workspaceRoot, rel),
-  }));
+  const selectedFiles: SelectedFile[] = selection
+    .map((rel) => {
+      const absolutePath = treeProvider.resolveAbsolutePath(rel);
+      return absolutePath ? { relativePath: rel, absolutePath } : undefined;
+    })
+    .filter((f): f is SelectedFile => f !== undefined);
 
   await doGenerateAndDispatch(selectedFiles, panel, session, workspaceRoot);
 }

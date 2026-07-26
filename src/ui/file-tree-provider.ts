@@ -26,12 +26,21 @@ import { FilterChain } from '../core/filter';
 interface NodeData {
   /** Absolute path on disk. */
   absolutePath: string;
-  /** POSIX-style path relative to workspace root. */
+  /**
+   * POSIX-style path relative to the owning workspace folder. In multi-root
+   * workspaces this is prefixed with the folder name (e.g. "buzzer/src/x.ts")
+   * so paths stay unique across folders; single-root workspaces keep the
+   * unprefixed form for backwards compatibility with saved selections.
+   */
   relativePath: string;
   /** Display name (last path segment). */
   name: string;
   /** True for directories. */
   isDirectory: boolean;
+  /** Absolute path of the workspace folder this node belongs to. */
+  folderRoot: string;
+  /** Workspace folder name — set only when multiple folders are open. */
+  folderName: string | undefined;
 }
 
 /**
@@ -87,21 +96,24 @@ export class FileTreeProvider
    */
   private checkedDirs = new Set<string>();
 
-  /** Cached file watcher for the workspace, so we refresh on file changes. */
-  private watcher: vscode.FileSystemWatcher | undefined;
+  /** One file watcher per workspace folder, so we refresh on file changes. */
+  private watchers: vscode.FileSystemWatcher[] = [];
 
   /** Optional filter — used to grey out items that would be skipped. */
   private previewFilter: FilterChain | undefined;
 
+  private readonly workspaceFolders: readonly vscode.WorkspaceFolder[];
+
   constructor(
-    private readonly workspaceRoot: string | undefined,
+    workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined,
     initialSelection: string[] = [],
   ) {
+    this.workspaceFolders = workspaceFolders ?? [];
     for (const p of initialSelection) {
       this.selected.add(p);
     }
-    if (workspaceRoot) {
-      this.setupWatcher(workspaceRoot);
+    for (const folder of this.workspaceFolders) {
+      this.setupWatcher(folder.uri.fsPath);
     }
   }
 
@@ -122,10 +134,38 @@ export class FileTreeProvider
   }
 
   async getChildren(element?: FileTreeItem): Promise<FileTreeItem[]> {
-    if (!this.workspaceRoot) {
+    if (this.workspaceFolders.length === 0) {
       return [];
     }
-    const parentAbs = element?.data.absolutePath ?? this.workspaceRoot;
+
+    if (!element) {
+      if (this.workspaceFolders.length === 1) {
+        const folder = this.workspaceFolders[0];
+        return this.readDirectory(folder.uri.fsPath, folder.uri.fsPath, undefined);
+      }
+      // Multi-root workspace: surface every folder as a top-level node so
+      // files under all of them (not just the first) are reachable.
+      return this.workspaceFolders.map((folder) => {
+        const data: NodeData = {
+          absolutePath: folder.uri.fsPath,
+          relativePath: folder.name,
+          name: folder.name,
+          isDirectory: true,
+          folderRoot: folder.uri.fsPath,
+          folderName: folder.name,
+        };
+        return new FileTreeItem(data, vscode.TreeItemCollapsibleState.Expanded);
+      });
+    }
+
+    return this.readDirectory(element.data.absolutePath, element.data.folderRoot, element.data.folderName);
+  }
+
+  private async readDirectory(
+    parentAbs: string,
+    folderRoot: string,
+    folderName: string | undefined,
+  ): Promise<FileTreeItem[]> {
     let entries: [string, vscode.FileType][];
     try {
       entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(parentAbs));
@@ -139,7 +179,7 @@ export class FileTreeProvider
         continue;
       }
       const absolutePath = path.join(parentAbs, name);
-      const relativePath = this.toRelative(absolutePath);
+      const relativePath = this.toRelative(absolutePath, folderRoot, folderName);
       const isDirectory = (type & vscode.FileType.Directory) !== 0;
 
       // Skip symlinks pointing to themselves / outside the workspace for safety.
@@ -147,7 +187,7 @@ export class FileTreeProvider
         // Still allow symlinked files
       }
 
-      const data: NodeData = { absolutePath, relativePath, name, isDirectory };
+      const data: NodeData = { absolutePath, relativePath, name, isDirectory, folderRoot, folderName };
       const collapsibleState = isDirectory
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None;
@@ -223,20 +263,20 @@ export class FileTreeProvider
    * Also maintains `checkedDirs` so that only explicitly-ticked directories
    * show a checked checkbox in the sidebar (not their parents).
    */
-  async toggleDirectory(absoluteDirPath: string, checked: boolean): Promise<void> {
-    const dirRelPath = this.toRelative(absoluteDirPath);
-    const files = await this.listDescendantFiles(absoluteDirPath);
+  async toggleDirectory(dirData: NodeData, checked: boolean): Promise<void> {
+    const dirRelPath = dirData.relativePath;
+    const files = await this.listDescendantFiles(dirData.absolutePath);
     if (checked) {
       this.checkedDirs.add(dirRelPath);
       for (const f of files) {
-        this.selected.add(this.toRelative(f));
+        this.selected.add(this.toRelative(f, dirData.folderRoot, dirData.folderName));
       }
     } else {
       this.checkedDirs.delete(dirRelPath);
       // Also uncheck any ancestor directories — they are no longer fully selected.
       this.removeAncestorDirs(dirRelPath);
       for (const f of files) {
-        this.selected.delete(this.toRelative(f));
+        this.selected.delete(this.toRelative(f, dirData.folderRoot, dirData.folderName));
       }
     }
     // Refresh the whole tree so ancestor/sibling checkbox states update.
@@ -254,7 +294,7 @@ export class FileTreeProvider
     for (const [item, state] of items) {
       const checked = state === vscode.TreeItemCheckboxState.Checked;
       if (item.data.isDirectory) {
-        await this.toggleDirectory(item.data.absolutePath, checked);
+        await this.toggleDirectory(item.data, checked);
       } else {
         await this.toggleFile(item.data.relativePath, checked);
       }
@@ -285,16 +325,35 @@ export class FileTreeProvider
   // -- Helpers -----------------------------------------------------------
 
   /**
-   * Convert an absolute path to a POSIX-style workspace-relative path.
+   * Convert an absolute path to a POSIX-style path relative to its owning
+   * workspace folder, prefixed with the folder name when multiple folders
+   * are open (so paths stay unique across folders).
    */
-  private toRelative(absolutePath: string): string {
-    if (!this.workspaceRoot) {
-      return absolutePath;
-    }
-    const rel = path.relative(this.workspaceRoot, absolutePath);
+  private toRelative(absolutePath: string, folderRoot: string, folderName: string | undefined): string {
+    const rel = path.relative(folderRoot, absolutePath).split(path.sep).join('/');
     // Normalize to POSIX separators so it matches what the rest of the
     // pipeline expects (FilterChain, formatHandoff, etc.).
-    return rel.split(path.sep).join('/');
+    return folderName ? `${folderName}/${rel}` : rel;
+  }
+
+  /**
+   * Resolve a relativePath produced by this provider back to an absolute
+   * filesystem path. Single-root workspaces resolve directly against that
+   * folder; multi-root workspaces read the folder name from the first path
+   * segment (see `toRelative`).
+   */
+  resolveAbsolutePath(relativePath: string): string | undefined {
+    if (this.workspaceFolders.length === 0) {
+      return undefined;
+    }
+    if (this.workspaceFolders.length === 1) {
+      return path.join(this.workspaceFolders[0].uri.fsPath, relativePath);
+    }
+    const slash = relativePath.indexOf('/');
+    const folderName = slash === -1 ? relativePath : relativePath.slice(0, slash);
+    const rest = slash === -1 ? '' : relativePath.slice(slash + 1);
+    const folder = this.workspaceFolders.find((f) => f.name === folderName);
+    return folder ? path.join(folder.uri.fsPath, rest) : undefined;
   }
 
   /**
@@ -370,15 +429,18 @@ export class FileTreeProvider
 
   private setupWatcher(root: string): void {
     const pattern = new vscode.RelativePattern(root, '**/*');
-    this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
+    const watcher = vscode.workspace.createFileSystemWatcher(pattern);
     const refresh = (): void => this._onDidChangeTreeData.fire();
-    this.watcher.onDidCreate(refresh);
-    this.watcher.onDidDelete(refresh);
+    watcher.onDidCreate(refresh);
+    watcher.onDidDelete(refresh);
     // Don't refresh on every keystroke — onDidChange is too noisy.
+    this.watchers.push(watcher);
   }
 
   dispose(): void {
-    this.watcher?.dispose();
+    for (const watcher of this.watchers) {
+      watcher.dispose();
+    }
     this._onDidChangeTreeData.dispose();
     this._onDidChangeSelection.dispose();
   }

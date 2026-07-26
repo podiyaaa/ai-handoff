@@ -5,6 +5,12 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] — 2026-07-26
+
+### Fixed
+
+- **Multi-root file selector** — the sidebar file tree (the actual file-selection UI) only ever walked and let you select files from the first workspace folder (`folders[0]`), even though earlier fixes had already corrected the Explorer right-click path and the directory tree display for multi-root workspaces. Every open workspace folder now appears as its own top-level node in the sidebar, and files from any of them can be ticked and included in a handoff.
+
 ## [0.1.8] — 2026-07-24
 
 ### Added
