@@ -123,7 +123,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // selecting whole folders instead of just the clicked file. That's now
     // fixed at the source (see handleCheckboxChange), so reveal() here is
     // safe.
-    await revealAllDirectories(treeProvider, treeView);
+    await revealAllDirectories(treeProvider, treeView, debugChannel);
   });
 
   // -- Action panel --
@@ -263,7 +263,7 @@ export function activate(context: vscode.ExtensionContext): void {
       treeProvider.refresh();
     }),
     vscode.commands.registerCommand('aiHandoff.expandAllFiles', async () => {
-      await revealAllDirectories(treeProvider, treeView);
+      await revealAllDirectories(treeProvider, treeView, debugChannel);
     }),
     vscode.commands.registerCommand('aiHandoff.clearSelection', async () => {
       await treeProvider.clearSelection();
@@ -380,17 +380,40 @@ function enforceOffline(): void {
  * directories, so this only reveals matches; with no search, it walks (and
  * opens) the whole tree — used by both "Expand All" and search-triggered
  * auto-expand.
+ *
+ * A single reveal() (or getChildren()) failure must not abort revealing
+ * everything else — this is a recursive, sibling-by-sibling walk, and an
+ * uncaught rejection partway through would silently stop processing every
+ * directory after the failure point (e.g. a failure inside one top-level
+ * folder's subtree would prevent a later sibling folder from ever being
+ * revealed at all). Every step is wrapped so one bad node is logged and
+ * skipped rather than derailing the rest of the walk.
  */
 async function revealAllDirectories(
   treeProvider: FileTreeProvider,
   treeView: vscode.TreeView<FileTreeItem>,
+  debugChannel: vscode.OutputChannel,
   parent?: FileTreeItem,
 ): Promise<void> {
-  const children = await treeProvider.getChildren(parent);
+  let children: FileTreeItem[];
+  try {
+    children = await treeProvider.getChildren(parent);
+  } catch (e) {
+    debugChannel.appendLine(
+      `[revealAllDirectories] getChildren(${parent?.data.relativePath ?? 'root'}) threw: ${(e as Error).message}`,
+    );
+    return;
+  }
   for (const child of children) {
     if (child.data.isDirectory) {
-      await treeView.reveal(child, { expand: true, select: false, focus: false });
-      await revealAllDirectories(treeProvider, treeView, child);
+      try {
+        await treeView.reveal(child, { expand: true, select: false, focus: false });
+      } catch (e) {
+        debugChannel.appendLine(
+          `[revealAllDirectories] reveal(${JSON.stringify(child.data.relativePath)}) threw: ${(e as Error).message}`,
+        );
+      }
+      await revealAllDirectories(treeProvider, treeView, debugChannel, child);
     }
   }
 }
