@@ -86,6 +86,16 @@ export class FileTreeProvider
   /** Fires whenever the selection set changes. Emits the new list of paths. */
   readonly onDidChangeSelection = this._onDidChangeSelection.event;
 
+  private readonly _onDebugLog = new vscode.EventEmitter<string>();
+  /**
+   * Diagnostic trace of exactly what VS Code sends to handleCheckboxChange
+   * and when search/toggle state changes — for tracking down the reported
+   * "ticking one file selects its whole parent folder" bug, which has
+   * resisted two rounds of blind fixes. extension.ts pipes this to an
+   * output channel. Remove once that bug is confirmed fixed.
+   */
+  readonly onDebugLog = this._onDebugLog.event;
+
   private readonly _onDidToggleIndividualFile = new vscode.EventEmitter<{
     relativePath: string;
     checked: boolean;
@@ -309,6 +319,7 @@ export class FileTreeProvider
    * tree refresh — display-only, does not change the selection.
    */
   setSearchQuery(query: ParsedSearchQuery | undefined): void {
+    this._onDebugLog.fire(`setSearchQuery(${query ? JSON.stringify(query.raw) : 'undefined'})`);
     this.searchQuery = query;
     this._onDidChangeTreeData.fire();
   }
@@ -418,6 +429,7 @@ export class FileTreeProvider
    * because the directory is no longer fully selected as a unit.
    */
   async toggleFile(relativePath: string, checked: boolean): Promise<void> {
+    this._onDebugLog.fire(`toggleFile(${JSON.stringify(relativePath)}, checked=${checked})`);
     if (checked) {
       this.selected.add(relativePath);
     } else {
@@ -435,6 +447,9 @@ export class FileTreeProvider
    * show a checked checkbox in the sidebar (not their parents).
    */
   async toggleDirectory(dirData: NodeData, checked: boolean): Promise<void> {
+    this._onDebugLog.fire(
+      `toggleDirectory(${JSON.stringify(dirData.relativePath)}, checked=${checked}) — absolutePath=${dirData.absolutePath}`,
+    );
     const dirRelPath = dirData.relativePath;
     const files = await this.listDescendantFiles(dirData.absolutePath);
     if (checked) {
@@ -462,6 +477,16 @@ export class FileTreeProvider
   async handleCheckboxChange(
     items: ReadonlyArray<[FileTreeItem, vscode.TreeItemCheckboxState]>,
   ): Promise<void> {
+    this._onDebugLog.fire(
+      `handleCheckboxChange: VS Code sent ${items.length} item(s): ` +
+        items
+          .map(
+            ([item, state]) =>
+              `{path=${JSON.stringify(item.data.relativePath)}, isDirectory=${item.data.isDirectory}, ` +
+              `checked=${state === vscode.TreeItemCheckboxState.Checked}}`,
+          )
+          .join(', '),
+    );
     for (const [item, state] of items) {
       const checked = state === vscode.TreeItemCheckboxState.Checked;
       if (item.data.isDirectory) {
@@ -615,5 +640,6 @@ export class FileTreeProvider
     this._onDidChangeTreeData.dispose();
     this._onDidChangeSelection.dispose();
     this._onDidToggleIndividualFile.dispose();
+    this._onDebugLog.dispose();
   }
 }

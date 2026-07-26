@@ -40,6 +40,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // This extension is fully offline — no telemetry, no API calls, nothing.
   enforceOffline();
 
+  // Temporary diagnostic channel — see FileTreeProvider.onDebugLog. View via
+  // "View: Toggle Output" then pick "AI Handoff Debug" from the dropdown.
+  const debugChannel = vscode.window.createOutputChannel('AI Handoff Debug');
+  context.subscriptions.push(debugChannel);
+
   const workspaceRoot = getWorkspaceRoot();
   const store = new SelectionStore(context.workspaceState);
 
@@ -63,6 +68,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // Pass every workspace folder (not just the first) so multi-root
   // workspaces can select files from all of them, not just folders[0].
   const treeProvider = new FileTreeProvider(vscode.workspace.workspaceFolders, initialSelection);
+  treeProvider.onDebugLog((msg) => {
+    debugChannel.appendLine(`[${new Date().toISOString()}] ${msg}`);
+  });
   const treeView = vscode.window.createTreeView('aiHandoff.fileTree', {
     treeDataProvider: treeProvider,
     // Native "Collapse All" — reliable, since it's core VS Code UI behavior
@@ -86,6 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (msg.type !== 'queryChange') {
       return;
     }
+    debugChannel.appendLine(`[${new Date().toISOString()}] searchBar queryChange: ${JSON.stringify(msg.text)}`);
     const { query, error } = parseSearchQuery(msg.text);
     // On an invalid query (e.g. an unterminated regex while still typing),
     // surface the error inline and leave the last valid filter in place
