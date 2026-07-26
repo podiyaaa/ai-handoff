@@ -95,13 +95,19 @@ export function activate(context: vscode.ExtensionContext): void {
   let revealAgainRequested = false;
   async function requestRevealAllDirectories(): Promise<void> {
     if (revealInFlight) {
+      debugChannel.appendLine(`[${new Date().toISOString()}] revealAllDirectories: already running, coalescing`);
       revealAgainRequested = true;
       return;
     }
     revealAgainRequested = false;
+    const startedAt = Date.now();
+    debugChannel.appendLine(`[${new Date().toISOString()}] revealAllDirectories: starting`);
     revealInFlight = revealAllDirectories(treeProvider, treeView, debugChannel);
     try {
       await revealInFlight;
+      debugChannel.appendLine(
+        `[${new Date().toISOString()}] revealAllDirectories: finished in ${Date.now() - startedAt}ms`,
+      );
     } finally {
       revealInFlight = undefined;
       if (revealAgainRequested) {
@@ -433,11 +439,15 @@ async function revealAllDirectories(
   }
   for (const child of children) {
     if (child.data.isDirectory) {
+      const revealStartedAt = Date.now();
       try {
         await treeView.reveal(child, { expand: true, select: false, focus: false });
+        debugChannel.appendLine(
+          `[revealAllDirectories] reveal(${JSON.stringify(child.data.relativePath)}) took ${Date.now() - revealStartedAt}ms`,
+        );
       } catch (e) {
         debugChannel.appendLine(
-          `[revealAllDirectories] reveal(${JSON.stringify(child.data.relativePath)}) threw: ${(e as Error).message}`,
+          `[revealAllDirectories] reveal(${JSON.stringify(child.data.relativePath)}) threw after ${Date.now() - revealStartedAt}ms: ${(e as Error).message}`,
         );
       }
       await revealAllDirectories(treeProvider, treeView, debugChannel, child);
