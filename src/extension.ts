@@ -83,6 +83,33 @@ export function activate(context: vscode.ExtensionContext): void {
     await treeProvider.handleCheckboxChange(e.items);
   });
 
+  // Serializes revealAllDirectories calls: a full-tree walk (e.g. after
+  // clearing a search) has real UI latency per reveal() call, so it isn't
+  // instant. If another search change arrives while a walk is still
+  // running, two overlapping walks would both be calling reveal() against
+  // the same tree at once — coalesce instead: note that another pass is
+  // needed and run exactly one more once the current walk finishes,
+  // reflecting whatever the search state is by then (rather than queueing
+  // every intermediate request, which could pile up under rapid typing).
+  let revealInFlight: Promise<void> | undefined;
+  let revealAgainRequested = false;
+  async function requestRevealAllDirectories(): Promise<void> {
+    if (revealInFlight) {
+      revealAgainRequested = true;
+      return;
+    }
+    revealAgainRequested = false;
+    revealInFlight = revealAllDirectories(treeProvider, treeView, debugChannel);
+    try {
+      await revealInFlight;
+    } finally {
+      revealInFlight = undefined;
+      if (revealAgainRequested) {
+        await requestRevealAllDirectories();
+      }
+    }
+  }
+
   // -- Search bar (pinned above the Files tree) --
   const searchBar = new SearchBarProvider(context.extensionUri);
   context.subscriptions.push(
@@ -123,7 +150,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // selecting whole folders instead of just the clicked file. That's now
     // fixed at the source (see handleCheckboxChange), so reveal() here is
     // safe.
-    await revealAllDirectories(treeProvider, treeView, debugChannel);
+    await requestRevealAllDirectories();
   });
 
   // -- Action panel --
@@ -263,7 +290,7 @@ export function activate(context: vscode.ExtensionContext): void {
       treeProvider.refresh();
     }),
     vscode.commands.registerCommand('aiHandoff.expandAllFiles', async () => {
-      await revealAllDirectories(treeProvider, treeView, debugChannel);
+      await requestRevealAllDirectories();
     }),
     vscode.commands.registerCommand('aiHandoff.clearSelection', async () => {
       await treeProvider.clearSelection();
