@@ -473,22 +473,37 @@ export class FileTreeProvider
   /**
    * Handle the TreeView's onDidChangeCheckboxState event.
    * Called by extension.ts after wiring up the view.
+   *
+   * VS Code auto-includes every ancestor of the item you actually clicked in
+   * the SAME event batch, to keep their checkbox visuals in sync (e.g.
+   * ticking a deeply nested file also reports its parent, grandparent, etc.
+   * as "checked" in the same call) — this is native VS Code tree behavior,
+   * not something we asked for. Treating every entry as an independent user
+   * action was the actual cause of "ticking one file selects its whole
+   * parent folder": the auto-included ancestor entries were triggering full
+   * recursive toggleDirectory calls nobody asked for. Only the *deepest*
+   * item in a batch (one that isn't an ancestor of any other item in the
+   * same batch) is the real click; everything else is sync noise to ignore.
    */
   async handleCheckboxChange(
     items: ReadonlyArray<[FileTreeItem, vscode.TreeItemCheckboxState]>,
   ): Promise<void> {
-    this._onDebugLog.fire(
-      `handleCheckboxChange: VS Code sent ${items.length} item(s): ` +
-        items
-          .map(
-            ([item, state]) =>
-              `{path=${JSON.stringify(item.data.relativePath)}, isDirectory=${item.data.isDirectory}, ` +
-              `checked=${state === vscode.TreeItemCheckboxState.Checked}}`,
-          )
-          .join(', '),
-    );
+    const paths = items.map(([item]) => item.data.relativePath);
+    const isAncestorOfAnother = (candidate: string): boolean =>
+      paths.some((other) => other !== candidate && other.startsWith(`${candidate}/`));
+
     for (const [item, state] of items) {
+      if (isAncestorOfAnother(item.data.relativePath)) {
+        this._onDebugLog.fire(
+          `handleCheckboxChange: ignoring auto-included ancestor ${JSON.stringify(item.data.relativePath)}`,
+        );
+        continue;
+      }
       const checked = state === vscode.TreeItemCheckboxState.Checked;
+      this._onDebugLog.fire(
+        `handleCheckboxChange: real click on ${JSON.stringify(item.data.relativePath)} ` +
+          `(isDirectory=${item.data.isDirectory}, checked=${checked})`,
+      );
       if (item.data.isDirectory) {
         await this.toggleDirectory(item.data, checked);
       } else {

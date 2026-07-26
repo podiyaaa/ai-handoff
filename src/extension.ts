@@ -90,7 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
       webviewOptions: { retainContextWhenHidden: true },
     }),
   );
-  searchBar.onDidReceive((msg) => {
+  searchBar.onDidReceive(async (msg) => {
     if (msg.type !== 'queryChange') {
       return;
     }
@@ -100,21 +100,24 @@ export function activate(context: vscode.ExtensionContext): void {
     // surface the error inline and leave the last valid filter in place
     // rather than flashing the tree back to fully unfiltered every keystroke.
     searchBar.setError(error);
-    if (!error) {
-      // Deliberately does NOT force-reveal matching directories here (no
-      // revealAllDirectories call) — even though reveal() doesn't churn item
-      // identity, it does still reshape the tree's visible rows, and doing
-      // that automatically every time a search settles carries the same
-      // risk that made search-triggered id-churn unsafe: it can reshuffle
-      // rows while the user is mid-click on a checkbox in the results,
-      // misrouting the click to a different (ancestor) node — confirmed by
-      // testing, this reproduced with reveal() exactly like it did with
-      // id-churn. So search-triggered expansion is best-effort only (applies
-      // to directories rendered for the first time — see
-      // FileTreeProvider.directoryCollapsibleState); "Expand All" (a single
-      // deliberate button click, not an automatic per-keystroke action) is
-      // the reliable way to force everything open.
-      treeProvider.setSearchQuery(query);
+    if (error) {
+      return;
+    }
+    treeProvider.setSearchQuery(query);
+    if (query) {
+      // Reveal every matching directory so results are visible without
+      // manual clicking, even for folders you'd already collapsed by hand.
+      // An earlier investigation wrongly suspected this (and, before it, an
+      // id-churn approach) of causing checkbox clicks to get misrouted to
+      // the wrong node. The actual cause — confirmed via debug logging —
+      // was unrelated: handleCheckboxChange was treating every ancestor
+      // directory VS Code auto-includes in a checkbox-change batch (to keep
+      // ancestor checkboxes visually in sync) as an independent user action,
+      // bulk-selecting whole folders instead of just the clicked file. That's
+      // now fixed at the source (see handleCheckboxChange), so reveal() here
+      // is safe — getChildren() already excludes non-matching directories
+      // while a search is active, so this only reveals actual matches.
+      await revealAllDirectories(treeProvider, treeView);
     }
   });
 

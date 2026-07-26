@@ -430,3 +430,83 @@ describe('FileTreeProvider — onDidToggleIndividualFile', () => {
     expect(provider.getSelection()).to.deep.equal(['src/index.ts']);
   });
 });
+
+describe('FileTreeProvider — handleCheckboxChange ignores VS Code\'s auto-included ancestors', () => {
+  // Regression test for a real, reproduced bug: ticking a nested file's
+  // checkbox in the real VS Code UI delivers a batch that ALSO includes
+  // every ancestor directory marked "checked" (native VS Code tree
+  // behavior, keeping ancestor checkboxes visually in sync — not a second
+  // user action). Treating every batch entry as an independent toggle
+  // caused the whole ancestor chain to get bulk-selected via toggleDirectory
+  // instead of just the one file the user actually clicked.
+  let root: string;
+  let provider: FileTreeProvider;
+
+  before(async () => {
+    root = await makeSearchRoot();
+  });
+  beforeEach(() => {
+    provider = new FileTreeProvider([fakeFolder(root, 0)]);
+  });
+  afterEach(() => provider.dispose());
+  after(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  async function findNested(relativeSegments: string[]): Promise<FileTreeItem> {
+    let parent: FileTreeItem | undefined;
+    let found: FileTreeItem | undefined;
+    for (const name of relativeSegments) {
+      const children = await provider.getChildren(parent);
+      found = children.find((c) => c.data.name === name);
+      if (!found) {
+        throw new Error(`fixture missing ${relativeSegments.join('/')} (stuck at ${name})`);
+      }
+      parent = found;
+    }
+    return found!;
+  }
+
+  it('selects only the clicked file when VS Code also reports its whole ancestor chain as checked', async () => {
+    const loginTs = await findNested(['src', 'auth', 'login.ts']);
+    const auth = await findNested(['src', 'auth']);
+    const src = await findNested(['src']);
+
+    // Mirrors the real event VS Code sent: the clicked file first, then
+    // every ancestor up to the root, all marked Checked.
+    await provider.handleCheckboxChange([
+      [loginTs, 1 /* Checked */],
+      [auth, 1 /* Checked */],
+      [src, 1 /* Checked */],
+    ]);
+
+    expect(provider.getSelection()).to.deep.equal(['src/auth/login.ts']);
+  });
+
+  it('a genuine directory click still bulk-selects, even with its own ancestors also reported', async () => {
+    const auth = await findNested(['src', 'auth']);
+    const src = await findNested(['src']);
+
+    // The user clicked "auth" itself (not a file under it) — VS Code still
+    // reports "src" as an ancestor whose checkbox visual also changed.
+    await provider.handleCheckboxChange([
+      [auth, 1 /* Checked */],
+      [src, 1 /* Checked */],
+    ]);
+
+    expect(provider.getSelection()).to.deep.equal(['src/auth/login.test.ts', 'src/auth/login.ts']);
+  });
+
+  it('unchecking works the same way — only the deepest item is a real click', async () => {
+    const loginTs = await findNested(['src', 'auth', 'login.ts']);
+    const auth = await findNested(['src', 'auth']);
+    await provider.handleCheckboxChange([[loginTs, 1 /* Checked */]]);
+    expect(provider.getSelection()).to.deep.equal(['src/auth/login.ts']);
+
+    await provider.handleCheckboxChange([
+      [loginTs, 0 /* Unchecked */],
+      [auth, 0 /* Unchecked */],
+    ]);
+    expect(provider.getSelection()).to.deep.equal([]);
+  });
+});
