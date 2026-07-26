@@ -82,7 +82,7 @@ export function activate(context: vscode.ExtensionContext): void {
       webviewOptions: { retainContextWhenHidden: true },
     }),
   );
-  searchBar.onDidReceive(async (msg) => {
+  searchBar.onDidReceive((msg) => {
     if (msg.type !== 'queryChange') {
       return;
     }
@@ -91,17 +91,21 @@ export function activate(context: vscode.ExtensionContext): void {
     // surface the error inline and leave the last valid filter in place
     // rather than flashing the tree back to fully unfiltered every keystroke.
     searchBar.setError(error);
-    if (error) {
-      return;
-    }
-    treeProvider.setSearchQuery(query);
-    if (query) {
-      // getChildren() already excludes non-matching directories while a
-      // search is active, so this only reveals matches — and does so via
-      // reveal() (not item-identity tricks), so it can't affect in-flight
-      // checkbox clicks. The webview already debounces keystrokes, so this
-      // runs once per settled query, not per keystroke.
-      await revealAllDirectories(treeProvider, treeView);
+    if (!error) {
+      // Deliberately does NOT force-reveal matching directories here (no
+      // revealAllDirectories call) — even though reveal() doesn't churn item
+      // identity, it does still reshape the tree's visible rows, and doing
+      // that automatically every time a search settles carries the same
+      // risk that made search-triggered id-churn unsafe: it can reshuffle
+      // rows while the user is mid-click on a checkbox in the results,
+      // misrouting the click to a different (ancestor) node — confirmed by
+      // testing, this reproduced with reveal() exactly like it did with
+      // id-churn. So search-triggered expansion is best-effort only (applies
+      // to directories rendered for the first time — see
+      // FileTreeProvider.directoryCollapsibleState); "Expand All" (a single
+      // deliberate button click, not an automatic per-keystroke action) is
+      // the reliable way to force everything open.
+      treeProvider.setSearchQuery(query);
     }
   });
 
