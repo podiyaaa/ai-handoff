@@ -51,6 +51,16 @@ export class FileTreeItem extends vscode.TreeItem {
   constructor(public readonly data: NodeData, collapsibleState: vscode.TreeItemCollapsibleState) {
     super(data.name, collapsibleState);
 
+    // A STABLE id (never changes for the same logical file/folder — not to
+    // be confused with the churning generation-counter id from an earlier,
+    // reverted attempt, which caused a real bug by making VS Code treat
+    // every node as "new" on every search keystroke). relativePath is
+    // already unique across the whole tree, so this is a safe, permanent
+    // identity VS Code can use to track expand/collapse and selection state
+    // — the documented, recommended way to do this per TreeItem.id's own
+    // docs, and needed for "Collapse All" and reveal() to reliably track
+    // every node instead of falling back to a fragile position-based guess.
+    this.id = data.relativePath || data.name;
     this.resourceUri = vscode.Uri.file(data.absolutePath);
     this.tooltip = data.relativePath || data.name;
 
