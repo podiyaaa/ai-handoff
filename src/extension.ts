@@ -110,7 +110,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // needed and run exactly one more once the current walk finishes,
   // reflecting whatever the search state is by then (rather than queueing
   // every intermediate request, which could pile up under rapid typing).
-  let revealInFlight: Promise<void> | undefined;
+  let revealInFlight: Thenable<void> | undefined;
   let revealAgainRequested = false;
   async function requestRevealAllDirectories(): Promise<void> {
     if (revealInFlight) {
@@ -121,7 +121,10 @@ export function activate(context: vscode.ExtensionContext): void {
     revealAgainRequested = false;
     const startedAt = Date.now();
     debugChannel.appendLine(`[${new Date().toISOString()}] revealAllDirectories: starting`);
-    revealInFlight = revealAllDirectories(treeProvider, treeView, debugChannel);
+    revealInFlight = vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: 'AI Handoff: expanding folders…' },
+      () => revealAllDirectories(treeProvider, treeView, debugChannel),
+    );
     try {
       await revealInFlight;
       debugChannel.appendLine(
