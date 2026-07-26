@@ -12,6 +12,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { formatBytes } from './core/filter';
+import { parseSearchQuery } from './core/search-filter';
 import { formatTokenCount } from './core/token-estimator';
 import type {
   HandoffOptions,
@@ -22,8 +23,9 @@ import type {
 import { generateHandoff } from './services/handoff-generator';
 import { SelectionStore } from './services/selection-store';
 import { ActionPanelProvider, formatStatsForPanel } from './ui/action-panel';
-import { FileTreeProvider } from './ui/file-tree-provider';
+import { FileTreeItem, FileTreeProvider } from './ui/file-tree-provider';
 import { dispatchHandoff, pickDestinations } from './ui/output-picker';
+import { SearchBarProvider } from './ui/search-bar-panel';
 
 // In-memory transient state — not persisted, lives for the session
 interface SessionState {
@@ -63,12 +65,44 @@ export function activate(context: vscode.ExtensionContext): void {
   const treeProvider = new FileTreeProvider(vscode.workspace.workspaceFolders, initialSelection);
   const treeView = vscode.window.createTreeView('aiHandoff.fileTree', {
     treeDataProvider: treeProvider,
+    // Native "Collapse All" — reliable, since it's core VS Code UI behavior
+    // rather than something we have to force via the tree data provider.
     showCollapseAll: true,
     canSelectMany: false,
   });
   // Native checkbox events
   treeView.onDidChangeCheckboxState(async (e) => {
     await treeProvider.handleCheckboxChange(e.items);
+  });
+
+  // -- Search bar (pinned above the Files tree) --
+  const searchBar = new SearchBarProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(SearchBarProvider.viewType, searchBar, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
+  searchBar.onDidReceive(async (msg) => {
+    if (msg.type !== 'queryChange') {
+      return;
+    }
+    const { query, error } = parseSearchQuery(msg.text);
+    // On an invalid query (e.g. an unterminated regex while still typing),
+    // surface the error inline and leave the last valid filter in place
+    // rather than flashing the tree back to fully unfiltered every keystroke.
+    searchBar.setError(error);
+    if (error) {
+      return;
+    }
+    treeProvider.setSearchQuery(query);
+    if (query) {
+      // getChildren() already excludes non-matching directories while a
+      // search is active, so this only reveals matches — and does so via
+      // reveal() (not item-identity tricks), so it can't affect in-flight
+      // checkbox clicks. The webview already debounces keystrokes, so this
+      // runs once per settled query, not per keystroke.
+      await revealAllDirectories(treeProvider, treeView);
+    }
   });
 
   // -- Action panel --
@@ -78,6 +112,20 @@ export function activate(context: vscode.ExtensionContext): void {
       webviewOptions: { retainContextWhenHidden: true },
     }),
   );
+
+  // -- Ticking one specific file's checkbox is a deliberate "include this
+  // exact file" action (e.g. after finding it via search), so auto-register
+  // it as a filter override — unlike ticking a whole folder, which stays
+  // subject to the smart filter/gitignore so bulk-selecting a folder can't
+  // accidentally drag in its node_modules. Runs synchronously so the
+  // override is applied before onDidChangeSelection recomputes stats below.
+  treeProvider.onDidToggleIndividualFile(({ relativePath, checked }) => {
+    if (checked) {
+      session.overriddenPaths.add(relativePath);
+    } else {
+      session.overriddenPaths.delete(relativePath);
+    }
+  });
 
   // -- React to selection changes by updating the panel stats --
   treeProvider.onDidChangeSelection(async (selected) => {
@@ -193,6 +241,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('aiHandoff.refreshTree', () => {
       treeProvider.refresh();
     }),
+    vscode.commands.registerCommand('aiHandoff.expandAllFiles', async () => {
+      await revealAllDirectories(treeProvider, treeView);
+    }),
     vscode.commands.registerCommand('aiHandoff.clearSelection', async () => {
       await treeProvider.clearSelection();
       session.overriddenPaths.clear();
@@ -299,6 +350,29 @@ function enforceOffline(): void {
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
+
+/**
+ * Force every directory currently returned by getChildren() open, via
+ * TreeView.reveal() (the documented API for this) rather than any item-
+ * identity trick — so it can't interfere with an in-flight checkbox click.
+ * Under an active search, getChildren() already excludes non-matching
+ * directories, so this only reveals matches; with no search, it walks (and
+ * opens) the whole tree — used by both "Expand All" and search-triggered
+ * auto-expand.
+ */
+async function revealAllDirectories(
+  treeProvider: FileTreeProvider,
+  treeView: vscode.TreeView<FileTreeItem>,
+  parent?: FileTreeItem,
+): Promise<void> {
+  const children = await treeProvider.getChildren(parent);
+  for (const child of children) {
+    if (child.data.isDirectory) {
+      await treeView.reveal(child, { expand: true, select: false, focus: false });
+      await revealAllDirectories(treeProvider, treeView, child);
+    }
+  }
+}
 
 function getWorkspaceRoot(): string | undefined {
   const folders = vscode.workspace.workspaceFolders;

@@ -530,9 +530,10 @@ export function formatStatsForPanel(stats: PanelStats): PanelStats & {
 }
 
 /**
- * Random nonce for the webview's CSP.
+ * Random nonce for the webview's CSP. Shared with other webview providers
+ * (e.g. SearchBarProvider) so there's one implementation.
  */
-function generateNonce(): string {
+export function generateNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
   for (let i = 0; i < 32; i++) {

@@ -19,6 +19,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { FilterChain } from '../core/filter';
+import { matchesSearchQuery, ParsedSearchQuery } from '../core/search-filter';
 
 /**
  * Internal cache entry. Built lazily as the user expands directories.
@@ -85,6 +86,21 @@ export class FileTreeProvider
   /** Fires whenever the selection set changes. Emits the new list of paths. */
   readonly onDidChangeSelection = this._onDidChangeSelection.event;
 
+  private readonly _onDidToggleIndividualFile = new vscode.EventEmitter<{
+    relativePath: string;
+    checked: boolean;
+  }>();
+  /**
+   * Fires only for a single file's own checkbox being ticked/unticked directly
+   * (e.g. after finding it via search) — NOT when it becomes selected as part
+   * of a directory bulk-toggle. Ticking one specific file is a deliberate "I
+   * want this exact file" action, so extension.ts uses this to auto-register
+   * it as a filter override; a directory tick stays subject to the smart
+   * filter/gitignore so it's still safe to bulk-select a folder without
+   * accidentally dragging in its node_modules.
+   */
+  readonly onDidToggleIndividualFile = this._onDidToggleIndividualFile.event;
+
   /** The user's selection: POSIX-style relative paths (files, or raw dir paths from right-click). */
   private selected = new Set<string>();
 
@@ -101,6 +117,13 @@ export class FileTreeProvider
 
   /** Optional filter — used to grey out items that would be skipped. */
   private previewFilter: FilterChain | undefined;
+
+  /**
+   * Optional search query — a *display* filter (unlike previewFilter, it
+   * hides non-matching items entirely rather than greying them out). Does
+   * not affect selection: hidden files stay selected if they already were.
+   */
+  private searchQuery: ParsedSearchQuery | undefined;
 
   private readonly workspaceFolders: readonly vscode.WorkspaceFolder[];
 
@@ -138,27 +161,31 @@ export class FileTreeProvider
       return [];
     }
 
+    let items: FileTreeItem[];
     if (!element) {
       if (this.workspaceFolders.length === 1) {
         const folder = this.workspaceFolders[0];
-        return this.readDirectory(folder.uri.fsPath, folder.uri.fsPath, undefined);
+        items = await this.readDirectory(folder.uri.fsPath, folder.uri.fsPath, undefined);
+      } else {
+        // Multi-root workspace: surface every folder as a top-level node so
+        // files under all of them (not just the first) are reachable.
+        items = this.workspaceFolders.map((folder) => {
+          const data: NodeData = {
+            absolutePath: folder.uri.fsPath,
+            relativePath: folder.name,
+            name: folder.name,
+            isDirectory: true,
+            folderRoot: folder.uri.fsPath,
+            folderName: folder.name,
+          };
+          return new FileTreeItem(data, this.directoryCollapsibleState(/* topLevel */ true));
+        });
       }
-      // Multi-root workspace: surface every folder as a top-level node so
-      // files under all of them (not just the first) are reachable.
-      return this.workspaceFolders.map((folder) => {
-        const data: NodeData = {
-          absolutePath: folder.uri.fsPath,
-          relativePath: folder.name,
-          name: folder.name,
-          isDirectory: true,
-          folderRoot: folder.uri.fsPath,
-          folderName: folder.name,
-        };
-        return new FileTreeItem(data, vscode.TreeItemCollapsibleState.Expanded);
-      });
+    } else {
+      items = await this.readDirectory(element.data.absolutePath, element.data.folderRoot, element.data.folderName);
     }
 
-    return this.readDirectory(element.data.absolutePath, element.data.folderRoot, element.data.folderName);
+    return this.applySearchFilter(items);
   }
 
   private async readDirectory(
@@ -189,7 +216,7 @@ export class FileTreeProvider
 
       const data: NodeData = { absolutePath, relativePath, name, isDirectory, folderRoot, folderName };
       const collapsibleState = isDirectory
-        ? vscode.TreeItemCollapsibleState.Collapsed
+        ? this.directoryCollapsibleState(/* topLevel */ false)
         : vscode.TreeItemCollapsibleState.None;
       items.push(new FileTreeItem(data, collapsibleState));
     }
@@ -203,6 +230,149 @@ export class FileTreeProvider
     });
 
     return items;
+  }
+
+  // -- Expand/collapse state -----------------------------------------------
+
+  /**
+   * Decide a directory's *default* collapsible state for a freshly-rendered
+   * node: expanded while a search is active (so matches are visible without
+   * manual clicks) or for a top-level multi-root folder, collapsed otherwise.
+   *
+   * This is only a default — it doesn't retroactively change a node VS Code
+   * has already rendered (VS Code remembers a node's current expand/collapse
+   * UI state across a plain refresh regardless of what we return here). To
+   * actually force an already-rendered node open, use `TreeView.reveal(item,
+   * { expand: true })` — see `revealAllDirectories` in extension.ts — which
+   * is the documented, safe way to do this. An earlier attempt forced it by
+   * tagging every item's `id` with a bumped counter so VS Code would treat
+   * the whole tree as new; that identity churn, happening automatically and
+   * repeatedly while the user might be mid-click on a tree checkbox, could
+   * get a click misattributed to the wrong (ancestor) node — e.g. ticking
+   * one file right before clearing the search box ended up toggling its
+   * whole parent folder instead, silently selecting many unintended files.
+   * `reveal()` doesn't touch item identity, so it can't cause that.
+   */
+  private directoryCollapsibleState(topLevel: boolean): vscode.TreeItemCollapsibleState {
+    if (this.searchQuery || topLevel) {
+      return vscode.TreeItemCollapsibleState.Expanded;
+    }
+    return vscode.TreeItemCollapsibleState.Collapsed;
+  }
+
+  /**
+   * Resolve the parent of a tree element, purely from its already-known path
+   * data (no filesystem access) — required by `TreeView.reveal()` to build
+   * the ancestor chain down to an element that isn't currently rendered.
+   */
+  getParent(element: FileTreeItem): FileTreeItem | undefined {
+    const { folderRoot, folderName, absolutePath } = element.data;
+    if (absolutePath === folderRoot) {
+      // Element is itself a top-level node (a multi-root folder-root pseudo
+      // node, or — in single-root mode — the workspace root, which has no
+      // node of its own since getChildren(undefined) returns its contents
+      // directly) — either way, there's no parent to reveal through.
+      return undefined;
+    }
+
+    const parentAbsolutePath = path.dirname(absolutePath);
+    if (parentAbsolutePath === folderRoot) {
+      if (!folderName) {
+        return undefined; // single-root: the root has no node of its own
+      }
+      const data: NodeData = {
+        absolutePath: folderRoot,
+        relativePath: folderName,
+        name: folderName,
+        isDirectory: true,
+        folderRoot,
+        folderName,
+      };
+      return new FileTreeItem(data, this.directoryCollapsibleState(/* topLevel */ true));
+    }
+
+    const data: NodeData = {
+      absolutePath: parentAbsolutePath,
+      relativePath: this.toRelative(parentAbsolutePath, folderRoot, folderName),
+      name: path.basename(parentAbsolutePath),
+      isDirectory: true,
+      folderRoot,
+      folderName,
+    };
+    return new FileTreeItem(data, this.directoryCollapsibleState(/* topLevel */ false));
+  }
+
+  // -- Search filter -------------------------------------------------------
+
+  /**
+   * Set the active search query (or `undefined` to clear it). Triggers a
+   * tree refresh — display-only, does not change the selection.
+   */
+  setSearchQuery(query: ParsedSearchQuery | undefined): void {
+    this.searchQuery = query;
+    this._onDidChangeTreeData.fire();
+  }
+
+  /** The active search query, if any. */
+  getSearchQuery(): ParsedSearchQuery | undefined {
+    return this.searchQuery;
+  }
+
+  /**
+   * Filter a level's items against the active search query. Files must
+   * match directly; directories are kept if they, or any descendant, match
+   * (so you can still navigate down to a match).
+   */
+  private async applySearchFilter(items: FileTreeItem[]): Promise<FileTreeItem[]> {
+    const query = this.searchQuery;
+    if (!query) {
+      return items;
+    }
+    const kept: FileTreeItem[] = [];
+    for (const item of items) {
+      if (item.data.isDirectory) {
+        if (await this.directoryHasMatch(item.data, query)) {
+          kept.push(item);
+        }
+      } else if (matchesSearchQuery(item.data.relativePath, item.data.name, query)) {
+        kept.push(item);
+      }
+    }
+    return kept;
+  }
+
+  /**
+   * Recursively check whether a directory contains at least one file
+   * matching the query. Short-circuits on the first match found.
+   */
+  private async directoryHasMatch(dirData: NodeData, query: ParsedSearchQuery): Promise<boolean> {
+    let entries: [string, vscode.FileType][];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(dirData.absolutePath));
+    } catch {
+      return false;
+    }
+    for (const [name, type] of entries) {
+      const absolutePath = path.join(dirData.absolutePath, name);
+      const isDirectory = (type & vscode.FileType.Directory) !== 0;
+      const relativePath = this.toRelative(absolutePath, dirData.folderRoot, dirData.folderName);
+      if (isDirectory) {
+        const childData: NodeData = {
+          absolutePath,
+          relativePath,
+          name,
+          isDirectory: true,
+          folderRoot: dirData.folderRoot,
+          folderName: dirData.folderName,
+        };
+        if (await this.directoryHasMatch(childData, query)) {
+          return true;
+        }
+      } else if (matchesSearchQuery(relativePath, name, query)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // -- Selection ---------------------------------------------------------
@@ -254,6 +424,7 @@ export class FileTreeProvider
       this.selected.delete(relativePath);
       this.removeAncestorDirs(relativePath);
     }
+    this._onDidToggleIndividualFile.fire({ relativePath, checked });
     this._onDidChangeSelection.fire(this.getSelection());
   }
 
@@ -443,5 +614,6 @@ export class FileTreeProvider
     }
     this._onDidChangeTreeData.dispose();
     this._onDidChangeSelection.dispose();
+    this._onDidToggleIndividualFile.dispose();
   }
 }

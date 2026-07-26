@@ -5,6 +5,22 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Search/filter bar above the sidebar file tree** — a persistent search box (its own small panel, pinned directly above the Files tree) filters the tree down to matching files as you type. Supports three modes: plain text (substring match against the path), `ext:ts,tsx` (match by extension), and `re:^use[A-Z]` (regex, case-insensitive), with an inline error hint for invalid input. Directories containing a match reliably expand once a search settles — including ones you'd already collapsed by hand — via `TreeView.reveal()`, and a clear (✕) button appears while the box has text. Purely a display filter — it never changes what's selected.
+- **"Expand All" button** — the Files view title bar has an Expand All action (alongside VS Code's native "Collapse All") that reliably opens every directory, also via `TreeView.reveal()`.
+
+### Changed
+
+- **Search bar visual polish** — the search panel's background now matches the Files tree right below it instead of the default webview background, its content is vertically centered instead of pinned to the top, and the "ext:/re:" hint line only appears while the box is focused or has text — so at rest it reads as a single compact row instead of a mostly-empty panel.
+
+### Fixed
+
+- **Manually checking a file found via search could be silently dropped** — ticking an individual file's checkbox only added it to the selection; it didn't bypass the smart filter/gitignore, so a file you'd deliberately searched for and checked (e.g. inside `dist/` or `node_modules/`) could still vanish from the generated handoff with no warning. Ticking one specific file's own checkbox now auto-registers it as a filter override, same as clicking "include anyway" in the skipped-files list. Ticking a whole *directory's* checkbox is unaffected — bulk-selecting a folder still respects the smart filter/gitignore, so it can't accidentally drag in its `node_modules`.
+- **Checkbox clicks near a search change could select the wrong item** — an earlier attempt at search-triggered auto-expand forced already-rendered folders open by tagging every tree item's `id` with a counter bumped on every search keystroke, so VS Code would treat the whole tree as new. That churn, happening automatically and repeatedly while you might be mid-click on a checkbox in the search results, could get a click misattributed to the wrong (ancestor) node — e.g. ticking one file right before clearing the search box could end up toggling its entire parent folder instead, silently selecting many unintended files. Replaced entirely with `TreeView.reveal()` (the documented API for forcing an item open), which doesn't touch item identity and can't affect an in-flight checkbox click. Also replaced the earlier custom Collapse-All/Expand-All toggle (which had the same id-churn problem and, on top of that, simply didn't reliably work) with VS Code's native "Collapse All" plus a `reveal()`-based "Expand All".
+
 ## [0.1.9] — 2026-07-26
 
 ### Fixed

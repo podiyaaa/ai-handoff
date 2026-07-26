@@ -48,9 +48,11 @@ src/
 │   ├── filter.ts         # FilterChain: smart filter / gitignore / custom patterns / size
 │   ├── formatter.ts      # formatHandoff() → xml | markdown | plain output
 │   ├── tree-builder.ts   # ASCII directory tree rendering
-│   └── token-estimator.ts
+│   ├── token-estimator.ts
+│   └── search-filter.ts  # Sidebar search query parsing (name / ext: / re:) + matching
 ├── ui/                   # VS Code API — display only, no business logic
 │   ├── file-tree-provider.ts  # Sidebar TreeView with checkboxes (lazy directory walk)
+│   ├── search-bar-panel.ts    # Webview pinned above the tree — live search input
 │   ├── action-panel.ts        # Webview sidebar panel (vanilla HTML/CSS/JS, no framework)
 │   └── output-picker.ts       # QuickPick for clipboard / file / tab dispatch
 └── services/             # Side-effectful: filesystem I/O + VS Code state
@@ -79,5 +81,12 @@ esbuild bundles `src/extension.ts` → `dist/extension.js` (CJS, `vscode` extern
 - **TypeScript strict mode is fully enabled** (`noImplicitAny`, `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`).
 - `SelectionStore` in `services/selection-store.ts` ships with `InMemoryMemento` — use it in tests instead of mocking `vscode.Memento`.
 - The action panel webview is intentionally framework-free; all styling uses VS Code CSS variables for automatic theme support.
-- File overrides (user clicks "include anyway") bypass path-based filters but **not** the size limit — this is intentional.
+- File overrides (user clicks "include anyway", or ticks one specific file's own checkbox in the sidebar — see `FileTreeProvider.onDidToggleIndividualFile`) bypass path-based filters but **not** the size limit — this is intentional. Ticking a whole *directory's* checkbox does **not** auto-override — bulk-selecting a folder must stay subject to the smart filter/gitignore, or it could silently drag in its `node_modules`.
 - Commit messages follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, etc.).
+
+## Git workflow
+
+- **Every bug fix, feature, or change gets its own branch off `master`** — never commit work-in-progress directly to `master`.
+- Open a pull request from that branch back to `master`. The user reviews (and manually tests, e.g. via a built `.vsix`) before it merges.
+- **Version bumps happen from `master` only, after the user has tested and the branch is merged** — not before, and not on the feature branch. `package.json`/`package-lock.json` version bump + `CHANGELOG.md` entry + `.vsix` build/rebuild all happen post-merge.
+- If a branch needs another round of fixes after review/testing, keep iterating on that same branch (new commits, same PR) rather than opening a new one for the same change.

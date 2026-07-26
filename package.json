@@ -48,6 +48,12 @@
     "views": {
       "aiHandoff": [
         {
+          "id": "aiHandoff.searchBar",
+          "name": "Search",
+          "type": "webview",
+          "contextualTitle": "AI Handoff"
+        },
+        {
           "icon": "media/icon.png",
           "id": "aiHandoff.fileTree",
           "name": "Files",
@@ -76,6 +82,11 @@
         "command": "aiHandoff.refreshTree",
         "title": "Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "aiHandoff.expandAllFiles",
+        "title": "AI Handoff: Expand All",
+        "icon": "$(expand-all)"
       },
       {
         "command": "aiHandoff.clearSelection",
@@ -109,9 +120,14 @@
           "group": "navigation@1"
         },
         {
-          "command": "aiHandoff.clearSelection",
+          "command": "aiHandoff.expandAllFiles",
           "when": "view == aiHandoff.fileTree",
           "group": "navigation@2"
+        },
+        {
+          "command": "aiHandoff.clearSelection",
+          "when": "view == aiHandoff.fileTree",
+          "group": "navigation@3"
         }
       ]
     },
