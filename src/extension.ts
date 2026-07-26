@@ -83,6 +83,17 @@ export function activate(context: vscode.ExtensionContext): void {
     await treeProvider.handleCheckboxChange(e.items);
   });
 
+  // Diagnostic: fires for ANY expand/collapse, regardless of cause (native
+  // "Collapse All" button, manual disclosure-arrow click, or our own
+  // reveal() calls) — we have no direct hook into the native Collapse All
+  // button itself, so this is the only way to see what it actually does.
+  treeView.onDidExpandElement((e) => {
+    debugChannel.appendLine(`[${new Date().toISOString()}] onDidExpandElement: ${JSON.stringify(e.element.data.relativePath)}`);
+  });
+  treeView.onDidCollapseElement((e) => {
+    debugChannel.appendLine(`[${new Date().toISOString()}] onDidCollapseElement: ${JSON.stringify(e.element.data.relativePath)}`);
+  });
+
   // Serializes revealAllDirectories calls: a full-tree walk (e.g. after
   // clearing a search) has real UI latency per reveal() call, so it isn't
   // instant. If another search change arrives while a walk is still
