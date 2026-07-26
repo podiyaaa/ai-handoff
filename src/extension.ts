@@ -40,11 +40,6 @@ export function activate(context: vscode.ExtensionContext): void {
   // This extension is fully offline — no telemetry, no API calls, nothing.
   enforceOffline();
 
-  // Temporary diagnostic channel — see FileTreeProvider.onDebugLog. View via
-  // "View: Toggle Output" then pick "AI Handoff Debug" from the dropdown.
-  const debugChannel = vscode.window.createOutputChannel('AI Handoff Debug');
-  context.subscriptions.push(debugChannel);
-
   const workspaceRoot = getWorkspaceRoot();
   const store = new SelectionStore(context.workspaceState);
 
@@ -68,15 +63,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Pass every workspace folder (not just the first) so multi-root
   // workspaces can select files from all of them, not just folders[0].
   const treeProvider = new FileTreeProvider(vscode.workspace.workspaceFolders, initialSelection);
-  treeProvider.onDebugLog((msg) => {
-    debugChannel.appendLine(`[${new Date().toISOString()}] ${msg}`);
-  });
   const treeView = vscode.window.createTreeView('aiHandoff.fileTree', {
     treeDataProvider: treeProvider,
     // We provide our own single Collapse All / Expand All toggle (below)
-    // instead of the native non-toggling button — confirmed via debug
-    // logging that both directions work correctly, so consolidating is
-    // safe now.
+    // instead of the native non-toggling button.
     showCollapseAll: false,
     canSelectMany: false,
   });
@@ -91,17 +81,6 @@ export function activate(context: vscode.ExtensionContext): void {
     await treeProvider.handleCheckboxChange(e.items);
   });
 
-  // Diagnostic: fires for ANY expand/collapse, regardless of cause (native
-  // "Collapse All" button, manual disclosure-arrow click, or our own
-  // reveal() calls) — we have no direct hook into the native Collapse All
-  // button itself, so this is the only way to see what it actually does.
-  treeView.onDidExpandElement((e) => {
-    debugChannel.appendLine(`[${new Date().toISOString()}] onDidExpandElement: ${JSON.stringify(e.element.data.relativePath)}`);
-  });
-  treeView.onDidCollapseElement((e) => {
-    debugChannel.appendLine(`[${new Date().toISOString()}] onDidCollapseElement: ${JSON.stringify(e.element.data.relativePath)}`);
-  });
-
   // Serializes revealAllDirectories calls: a full-tree walk (e.g. after
   // clearing a search) has real UI latency per reveal() call, so it isn't
   // instant. If another search change arrives while a walk is still
@@ -114,22 +93,16 @@ export function activate(context: vscode.ExtensionContext): void {
   let revealAgainRequested = false;
   async function requestRevealAllDirectories(): Promise<void> {
     if (revealInFlight) {
-      debugChannel.appendLine(`[${new Date().toISOString()}] revealAllDirectories: already running, coalescing`);
       revealAgainRequested = true;
       return;
     }
     revealAgainRequested = false;
-    const startedAt = Date.now();
-    debugChannel.appendLine(`[${new Date().toISOString()}] revealAllDirectories: starting`);
     revealInFlight = vscode.window.withProgress(
       { location: vscode.ProgressLocation.Window, title: 'AI Handoff: expanding folders…' },
-      () => revealAllDirectories(treeProvider, treeView, debugChannel),
+      () => revealAllDirectories(treeProvider, treeView),
     );
     try {
       await revealInFlight;
-      debugChannel.appendLine(
-        `[${new Date().toISOString()}] revealAllDirectories: finished in ${Date.now() - startedAt}ms`,
-      );
       // Whatever triggered this (search or the Expand All button), things
       // are now expanded — show "Collapse All" as the next available action.
       await vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', false);
@@ -152,7 +125,6 @@ export function activate(context: vscode.ExtensionContext): void {
     if (msg.type !== 'queryChange') {
       return;
     }
-    debugChannel.appendLine(`[${new Date().toISOString()}] searchBar queryChange: ${JSON.stringify(msg.text)}`);
     const { query, error } = parseSearchQuery(msg.text);
     // On an invalid query (e.g. an unterminated regex while still typing),
     // surface the error inline and leave the last valid filter in place
@@ -335,16 +307,14 @@ export function activate(context: vscode.ExtensionContext): void {
       await requestRevealAllDirectories();
     }),
     vscode.commands.registerCommand('aiHandoff.collapseAllFiles', async () => {
-      // The same internal command the native "Collapse All" button used to
-      // invoke (confirmed working via debug logging — fired
-      // onDidCollapseElement for every directory in the tree), just
-      // triggered from our own toggle button instead.
+      // The same internal command the native "Collapse All" button uses.
+      // Undocumented VS Code internals, so guard against it disappearing in
+      // some future VS Code version rather than throwing an unhandled
+      // rejection.
       try {
         await vscode.commands.executeCommand('workbench.actions.treeView.aiHandoff.fileTree.collapseAll');
       } catch (e) {
-        debugChannel.appendLine(
-          `[${new Date().toISOString()}] aiHandoff.collapseAllFiles: internal collapseAll command failed: ${(e as Error).message}`,
-        );
+        console.error('[AI Handoff] collapseAll command failed:', e);
       }
       await vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', true);
     }),
@@ -475,32 +445,23 @@ function enforceOffline(): void {
 async function revealAllDirectories(
   treeProvider: FileTreeProvider,
   treeView: vscode.TreeView<FileTreeItem>,
-  debugChannel: vscode.OutputChannel,
   parent?: FileTreeItem,
 ): Promise<void> {
   let children: FileTreeItem[];
   try {
     children = await treeProvider.getChildren(parent);
-  } catch (e) {
-    debugChannel.appendLine(
-      `[revealAllDirectories] getChildren(${parent?.data.relativePath ?? 'root'}) threw: ${(e as Error).message}`,
-    );
+  } catch {
     return;
   }
   for (const child of children) {
     if (child.data.isDirectory) {
-      const revealStartedAt = Date.now();
       try {
         await treeView.reveal(child, { expand: true, select: false, focus: false });
-        debugChannel.appendLine(
-          `[revealAllDirectories] reveal(${JSON.stringify(child.data.relativePath)}) took ${Date.now() - revealStartedAt}ms`,
-        );
-      } catch (e) {
-        debugChannel.appendLine(
-          `[revealAllDirectories] reveal(${JSON.stringify(child.data.relativePath)}) threw after ${Date.now() - revealStartedAt}ms: ${(e as Error).message}`,
-        );
+      } catch {
+        // A single directory failing to reveal must not abort the rest of
+        // the walk — continue recursing into it and on to its siblings.
       }
-      await revealAllDirectories(treeProvider, treeView, debugChannel, child);
+      await revealAllDirectories(treeProvider, treeView, child);
     }
   }
 }
