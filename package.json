@@ -89,6 +89,11 @@
         "icon": "$(expand-all)"
       },
       {
+        "command": "aiHandoff.collapseAllFiles",
+        "title": "AI Handoff: Collapse All",
+        "icon": "$(collapse-all)"
+      },
+      {
         "command": "aiHandoff.clearSelection",
         "title": "Clear selection",
         "icon": "$(clear-all)"
@@ -120,8 +125,13 @@
           "group": "navigation@1"
         },
         {
+          "command": "aiHandoff.collapseAllFiles",
+          "when": "view == aiHandoff.fileTree && !aiHandoff.treeAllCollapsed",
+          "group": "navigation@2"
+        },
+        {
           "command": "aiHandoff.expandAllFiles",
-          "when": "view == aiHandoff.fileTree",
+          "when": "view == aiHandoff.fileTree && aiHandoff.treeAllCollapsed",
           "group": "navigation@2"
         },
         {

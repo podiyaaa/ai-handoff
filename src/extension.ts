@@ -73,9 +73,11 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const treeView = vscode.window.createTreeView('aiHandoff.fileTree', {
     treeDataProvider: treeProvider,
-    // Native "Collapse All" — reliable, since it's core VS Code UI behavior
-    // rather than something we have to force via the tree data provider.
-    showCollapseAll: true,
+    // We provide our own single Collapse All / Expand All toggle (below)
+    // instead of the native non-toggling button — confirmed via debug
+    // logging that both directions work correctly, so consolidating is
+    // safe now.
+    showCollapseAll: false,
     canSelectMany: false,
   });
   // Native checkbox events
@@ -119,6 +121,9 @@ export function activate(context: vscode.ExtensionContext): void {
       debugChannel.appendLine(
         `[${new Date().toISOString()}] revealAllDirectories: finished in ${Date.now() - startedAt}ms`,
       );
+      // Whatever triggered this (search or the Expand All button), things
+      // are now expanded — show "Collapse All" as the next available action.
+      await vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', false);
     } finally {
       revealInFlight = undefined;
       if (revealAgainRequested) {
@@ -319,6 +324,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('aiHandoff.expandAllFiles', async () => {
       await requestRevealAllDirectories();
+    }),
+    vscode.commands.registerCommand('aiHandoff.collapseAllFiles', async () => {
+      // The same internal command the native "Collapse All" button used to
+      // invoke (confirmed working via debug logging — fired
+      // onDidCollapseElement for every directory in the tree), just
+      // triggered from our own toggle button instead.
+      try {
+        await vscode.commands.executeCommand('workbench.actions.treeView.aiHandoff.fileTree.collapseAll');
+      } catch (e) {
+        debugChannel.appendLine(
+          `[${new Date().toISOString()}] aiHandoff.collapseAllFiles: internal collapseAll command failed: ${(e as Error).message}`,
+        );
+      }
+      await vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', true);
     }),
     vscode.commands.registerCommand('aiHandoff.clearSelection', async () => {
       await treeProvider.clearSelection();
