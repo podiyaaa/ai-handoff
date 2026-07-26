@@ -104,21 +104,26 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     treeProvider.setSearchQuery(query);
-    if (query) {
-      // Reveal every matching directory so results are visible without
-      // manual clicking, even for folders you'd already collapsed by hand.
-      // An earlier investigation wrongly suspected this (and, before it, an
-      // id-churn approach) of causing checkbox clicks to get misrouted to
-      // the wrong node. The actual cause — confirmed via debug logging —
-      // was unrelated: handleCheckboxChange was treating every ancestor
-      // directory VS Code auto-includes in a checkbox-change batch (to keep
-      // ancestor checkboxes visually in sync) as an independent user action,
-      // bulk-selecting whole folders instead of just the clicked file. That's
-      // now fixed at the source (see handleCheckboxChange), so reveal() here
-      // is safe — getChildren() already excludes non-matching directories
-      // while a search is active, so this only reveals actual matches.
-      await revealAllDirectories(treeProvider, treeView);
-    }
+    // Reveal every directory getChildren() currently returns — while a
+    // search is active that's just the matches (non-matching directories
+    // are already excluded), and once the search is cleared it's the whole
+    // tree, so clearing shows everything expanded rather than snapping back
+    // to whatever collapsed state existed before. This always wins over any
+    // prior manual "Collapse All" — reveal() forces a directory open
+    // regardless of its current state — and nothing here ever collapses
+    // anything; only an explicit user action (the disclosure arrow or
+    // "Collapse All") does that.
+    //
+    // An earlier investigation wrongly suspected this (and, before it, an
+    // id-churn approach) of causing checkbox clicks to get misrouted to the
+    // wrong node. The actual cause — confirmed via debug logging — was
+    // unrelated: handleCheckboxChange was treating every ancestor directory
+    // VS Code auto-includes in a checkbox-change batch (to keep ancestor
+    // checkboxes visually in sync) as an independent user action, bulk-
+    // selecting whole folders instead of just the clicked file. That's now
+    // fixed at the source (see handleCheckboxChange), so reveal() here is
+    // safe.
+    await revealAllDirectories(treeProvider, treeView);
   });
 
   // -- Action panel --
