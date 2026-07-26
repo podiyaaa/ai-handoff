@@ -17,6 +17,43 @@ export type SkipReason =
   | 'binary-skip'
   | 'unreadable';
 
+export type DiffScope = 'working' | 'staged' | 'both';
+
+export type DiffChangeType = 'added' | 'modified' | 'deleted' | 'renamed';
+
+/** A single file's changes as reported by `git diff`. */
+export interface DiffFileChange {
+  /** Repo-root-relative path, as git reports it. */
+  relativePath: string;
+  /** Set when changeType === 'renamed'. */
+  oldPath?: string;
+  changeType: DiffChangeType;
+  /** Unified diff hunk text for this file (or a binary-marker line). */
+  patch: string;
+  isBinary: boolean;
+  /** Which of the two diffs this hunk came from — relevant when scope === 'both'. */
+  staged: boolean;
+  /** Basename of the contributing repo root, used to disambiguate multi-repo workspaces. */
+  repoLabel: string;
+}
+
+export interface GitDiffOptions {
+  enabled: boolean;
+  scope: DiffScope;
+}
+
+/** The result of collecting git diffs across every repo in the workspace. */
+export interface GitDiffResult {
+  scope: DiffScope;
+  /** Merged across every repo that contributed; split back out via `repoLabel`/`staged` when rendering. */
+  files: DiffFileChange[];
+  /** Workspace folder names that aren't git repos. Informational only, not an error. */
+  reposWithNoGit: string[];
+  /** 'no-repos-found': none of the workspace folders are git repos. 'git-not-found': the git binary isn't on PATH. */
+  error?: 'no-repos-found' | 'git-not-found';
+  errorDetail?: string;
+}
+
 /** A single file that the user wants to include in the handoff. */
 export interface SelectedFile {
   /** Path relative to the workspace root, using POSIX separators. */
@@ -61,6 +98,8 @@ export interface HandoffOptions {
   customInstructions?: string;
   /** Paths the user explicitly checked to override filters. */
   overriddenPaths?: string[];
+  /** When set, appends a git diff section to the handoff alongside any selected files. */
+  gitDiff?: GitDiffOptions;
 }
 
 /** The final result of a handoff generation. */
@@ -71,6 +110,8 @@ export interface HandoffResult {
   included: IncludedFile[];
   /** Files that were filtered out, with reasons. */
   skipped: SkippedFile[];
+  /** Git diff result, present when `HandoffOptions.gitDiff.enabled` was set. */
+  diff?: GitDiffResult;
   /** Stats summary. */
   stats: HandoffStats;
 }
@@ -79,4 +120,5 @@ export interface HandoffStats {
   fileCount: number;
   totalSizeBytes: number;
   estimatedTokens: number;
+  diffFileCount: number;
 }

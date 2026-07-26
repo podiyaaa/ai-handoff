@@ -228,6 +228,26 @@
           "type": "boolean",
           "default": false,
           "description": "Show the 'Custom Instructions' text area in the action panel."
+        },
+        "aiHandoff.gitDiffEnabledByDefault": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include a git diff section in the handoff by default."
+        },
+        "aiHandoff.gitDiffScope": {
+          "type": "string",
+          "enum": [
+            "working",
+            "staged",
+            "both"
+          ],
+          "enumDescriptions": [
+            "Uncommitted working-tree changes (git diff) (default)",
+            "Staged changes only (git diff --cached)",
+            "Both, shown as separate sections"
+          ],
+          "default": "working",
+          "description": "Default scope for the git diff included in the handoff."
         }
       }
     }

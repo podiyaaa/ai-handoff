@@ -15,6 +15,7 @@ import { formatBytes } from './core/filter';
 import { parseSearchQuery } from './core/search-filter';
 import { formatTokenCount } from './core/token-estimator';
 import type {
+  DiffScope,
   HandoffOptions,
   OutputFormat,
   SelectedFile,
@@ -33,6 +34,8 @@ interface SessionState {
   currentInstructions: string;
   overriddenPaths: Set<string>;
   lastSkipped: Array<{ relativePath: string; reason: string; detail?: string }>;
+  gitDiffEnabled: boolean;
+  diffScope: DiffScope;
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -57,6 +60,8 @@ export function activate(context: vscode.ExtensionContext): void {
     currentInstructions: '',
     overriddenPaths: new Set(),
     lastSkipped: [],
+    gitDiffEnabled: getConfig('gitDiffEnabledByDefault', false),
+    diffScope: getConfig<DiffScope>('gitDiffScope', 'working'),
   };
 
   // -- Tree provider --
@@ -210,6 +215,16 @@ export function activate(context: vscode.ExtensionContext): void {
         break;
       case 'instructionsChange':
         session.currentInstructions = msg.text;
+        break;
+      case 'diffToggle':
+        session.gitDiffEnabled = msg.enabled;
+        await refreshPanel(treeProvider, actionPanel, session, workspaceRoot);
+        break;
+      case 'diffScopeChange':
+        session.diffScope = msg.scope;
+        if (session.gitDiffEnabled) {
+          await refreshPanel(treeProvider, actionPanel, session, workspaceRoot);
+        }
         break;
       case 'overrideFile': {
         session.overriddenPaths.add(msg.path);
@@ -474,6 +489,11 @@ function getWorkspaceRoot(): string | undefined {
   return folders[0].uri.fsPath;
 }
 
+/** Every workspace folder, as plain data — used for per-repo git diff discovery. */
+function getWorkspaceFolders(): { name: string; path: string }[] {
+  return (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, path: f.uri.fsPath }));
+}
+
 function getConfig<T>(key: string, defaultValue: T): T {
   return vscode.workspace.getConfiguration('aiHandoff').get<T>(key, defaultValue);
 }
@@ -492,6 +512,7 @@ function getHandoffOptions(session: SessionState): HandoffOptions {
       ? session.currentInstructions
       : undefined,
     overriddenPaths: Array.from(session.overriddenPaths),
+    gitDiff: { enabled: session.gitDiffEnabled, scope: session.diffScope },
   };
 }
 
@@ -508,11 +529,13 @@ async function refreshPanel(
 ): Promise<void> {
   if (!workspaceRoot) {
     panel.updateState({
-      stats: formatStatsForPanel({ fileCount: 0, totalSizeBytes: 0, estimatedTokens: 0 }) as never,
+      stats: formatStatsForPanel({ fileCount: 0, totalSizeBytes: 0, estimatedTokens: 0, diffFileCount: 0 }) as never,
       format: session.currentFormat,
       showCustomInstructions: getConfig('showCustomInstructions', false),
       instructions: session.currentInstructions,
       skipped: [],
+      gitDiffEnabled: session.gitDiffEnabled,
+      diffScope: session.diffScope,
     });
     return;
   }
@@ -526,7 +549,7 @@ async function refreshPanel(
     .filter((f): f is SelectedFile => f !== undefined);
 
   const opts = getHandoffOptions(session);
-  const result = await generateHandoff(selectedFiles, opts, workspaceRoot);
+  const result = await generateHandoff(selectedFiles, opts, workspaceRoot, getWorkspaceFolders());
 
   session.lastSkipped = result.skipped.map((s) => ({
     relativePath: s.relativePath,
@@ -540,6 +563,8 @@ async function refreshPanel(
     showCustomInstructions: getConfig('showCustomInstructions', false),
     instructions: session.currentInstructions,
     skipped: session.lastSkipped,
+    gitDiffEnabled: session.gitDiffEnabled,
+    diffScope: session.diffScope,
   });
 }
 
@@ -556,9 +581,10 @@ async function doGenerateAndDispatch(
   panel.setBusy(true);
   try {
     const opts = getHandoffOptions(session);
-    const result = await generateHandoff(selectedFiles, opts, workspaceRoot);
+    const result = await generateHandoff(selectedFiles, opts, workspaceRoot, getWorkspaceFolders());
+    const hasDiffContent = (result.diff?.files.length ?? 0) > 0;
 
-    if (result.included.length === 0) {
+    if (result.included.length === 0 && !hasDiffContent) {
       panel.showError(
         'No files made it through the filter. Check the skipped list and use [include anyway] to override.',
       );
@@ -572,6 +598,14 @@ async function doGenerateAndDispatch(
         skipped: session.lastSkipped,
       });
       return;
+    }
+
+    if (result.diff?.error) {
+      const message =
+        result.diff.error === 'git-not-found'
+          ? 'git was not found on PATH — diff skipped.'
+          : 'No git repository found in this workspace — diff skipped.';
+      panel.showError(message);
     }
 
     const destinations = await pickDestinations();
@@ -619,7 +653,7 @@ async function runGenerate(
   }
 
   const selection = treeProvider.getSelection();
-  if (selection.length === 0) {
+  if (selection.length === 0 && !session.gitDiffEnabled) {
     panel.showError('Select at least one file before generating.');
     return;
   }

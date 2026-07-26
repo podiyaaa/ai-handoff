@@ -1,4 +1,5 @@
 import { expect } from 'chai';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
@@ -303,6 +304,98 @@ describe('generateHandoff — pipeline', () => {
       expect(result.included).to.have.lengthOf(1);
       expect(result.included[0].relativePath).to.equal('src/util.ts');
     } finally {
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---- Git diff integration ------------------------------------------------
+
+function git(cwd: string, args: string[]): void {
+  execFileSync('git', args, { cwd });
+}
+
+async function makeGitWorkspace(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-diff-ws-'));
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.email', 'test@example.com']);
+  git(root, ['config', 'user.name', 'Test']);
+  await fs.writeFile(path.join(root, 'a.ts'), 'export const a = 1;\n');
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-q', '-m', 'init']);
+  return root;
+}
+
+describe('generateHandoff — git diff', () => {
+  it('attaches diff results alongside selected files when gitDiff is enabled', async () => {
+    const root = await makeGitWorkspace();
+    try {
+      await fs.writeFile(path.join(root, 'a.ts'), 'export const a = 2;\n');
+      const result = await generateHandoff(
+        [sel(root, 'a.ts')],
+        { ...baseOpts, gitDiff: { enabled: true, scope: 'working' } },
+        root,
+      );
+      expect(result.included).to.have.lengthOf(1);
+      expect(result.diff?.files).to.have.lengthOf(1);
+      expect(result.diff?.files[0].relativePath).to.equal('a.ts');
+      expect(result.text).to.include('<git_diff>');
+      expect(result.stats.diffFileCount).to.equal(1);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('produces a diff-only handoff when no files are selected', async () => {
+    const root = await makeGitWorkspace();
+    try {
+      await fs.writeFile(path.join(root, 'a.ts'), 'export const a = 3;\n');
+      const result = await generateHandoff(
+        [],
+        { ...baseOpts, gitDiff: { enabled: true, scope: 'working' } },
+        root,
+      );
+      expect(result.included).to.have.lengthOf(0);
+      expect(result.diff?.files).to.have.lengthOf(1);
+      expect(result.text).to.include('<git_diff>');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not populate diff when gitDiff is not enabled', async () => {
+    const root = await makeGitWorkspace();
+    try {
+      await fs.writeFile(path.join(root, 'a.ts'), 'export const a = 4;\n');
+      const result = await generateHandoff([sel(root, 'a.ts')], baseOpts, root);
+      expect(result.diff).to.be.undefined;
+      expect(result.stats.diffFileCount).to.equal(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('collects diffs across multiple workspace folders when provided', async () => {
+    const rootA = await makeGitWorkspace();
+    const rootB = await makeGitWorkspace();
+    try {
+      await fs.writeFile(path.join(rootA, 'a.ts'), 'export const a = 9;\n');
+      await fs.writeFile(path.join(rootB, 'a.ts'), 'export const a = 10;\n');
+
+      const result = await generateHandoff(
+        [],
+        { ...baseOpts, gitDiff: { enabled: true, scope: 'working' } },
+        rootA,
+        [
+          { name: path.basename(rootA), path: rootA },
+          { name: path.basename(rootB), path: rootB },
+        ],
+      );
+      expect(result.diff?.files).to.have.lengthOf(2);
+      const labels = result.diff?.files.map((f) => f.repoLabel).sort();
+      expect(labels).to.deep.equal([path.basename(rootA), path.basename(rootB)].sort());
+    } finally {
+      await fs.rm(rootA, { recursive: true, force: true });
       await fs.rm(rootB, { recursive: true, force: true });
     }
   });

@@ -15,7 +15,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { FilterChain, formatBytes } from '../core/filter';
-import { formatHandoff } from '../core/formatter';
+import { formatDiffSection, formatHandoff } from '../core/formatter';
 import { estimateTokens } from '../core/token-estimator';
 import { buildTreeForFormat } from '../core/tree-builder';
 import type {
@@ -26,6 +26,7 @@ import type {
   SkippedFile,
 } from '../core/types';
 import { readFile } from './file-reader';
+import { readGitDiffForWorkspace } from './git-diff-reader';
 
 /**
  * Read .gitignore from the workspace root (best-effort).
@@ -97,6 +98,7 @@ export async function generateHandoff(
   selected: SelectedFile[],
   options: HandoffOptions,
   workspaceRoot: string,
+  workspaceFolders?: { name: string; path: string }[],
 ): Promise<HandoffResult> {
   const gitignoreContent = options.respectGitignore
     ? await readGitignore(workspaceRoot)
@@ -229,10 +231,20 @@ export async function generateHandoff(
     options.format,
     { rootLabel },
   );
+
+  const diff = options.gitDiff?.enabled
+    ? await readGitDiffForWorkspace(
+        workspaceFolders ?? [{ name: path.basename(workspaceRoot) || 'workspace', path: workspaceRoot }],
+        options.gitDiff.scope,
+      )
+    : undefined;
+  const diffSection = diff ? formatDiffSection(diff, options.format) : undefined;
+
   const text = formatHandoff(displayFiles, {
     format: options.format,
     includeLineNumbers: options.includeLineNumbers,
     treeSection,
+    diffSection,
     customInstructions: options.customInstructions,
     skippedFiles: skipped,
   });
@@ -244,10 +256,12 @@ export async function generateHandoff(
     text,
     included,
     skipped,
+    diff,
     stats: {
       fileCount: included.length,
       totalSizeBytes,
       estimatedTokens,
+      diffFileCount: diff?.files.length ?? 0,
     },
   };
 }

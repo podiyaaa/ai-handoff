@@ -13,7 +13,7 @@
  */
 
 import * as vscode from 'vscode';
-import type { OutputFormat } from '../core/types';
+import type { DiffScope, OutputFormat } from '../core/types';
 import { formatBytes } from '../core/filter';
 import { formatTokenCount } from '../core/token-estimator';
 
@@ -24,6 +24,7 @@ export interface PanelStats {
   fileCount: number;
   totalSizeBytes: number;
   estimatedTokens: number;
+  diffFileCount: number;
 }
 
 /**
@@ -48,7 +49,9 @@ export type FromWebviewMessage =
   | { type: 'saveBookmark' }
   | { type: 'loadBookmark'; name: string }
   | { type: 'overrideBookmark'; name: string }
-  | { type: 'deleteBookmark'; name: string };
+  | { type: 'deleteBookmark'; name: string }
+  | { type: 'diffToggle'; enabled: boolean }
+  | { type: 'diffScopeChange'; scope: DiffScope };
 
 /**
  * A bookmark shown in the panel's bookmarks list.
@@ -69,6 +72,8 @@ export type ToWebviewMessage =
       showCustomInstructions: boolean;
       instructions: string;
       skipped: PanelSkippedFile[];
+      gitDiffEnabled: boolean;
+      diffScope: DiffScope;
     }
   | { type: 'generating'; busy: boolean }
   | { type: 'error'; message: string }
@@ -82,11 +87,13 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
 
   private view: vscode.WebviewView | undefined;
   private currentState: Omit<Extract<ToWebviewMessage, { type: 'state' }>, 'type'> = {
-    stats: { fileCount: 0, totalSizeBytes: 0, estimatedTokens: 0 },
+    stats: { fileCount: 0, totalSizeBytes: 0, estimatedTokens: 0, diffFileCount: 0 },
     format: 'xml',
     showCustomInstructions: false,
     instructions: '',
     skipped: [],
+    gitDiffEnabled: false,
+    diffScope: 'working',
   };
 
   private readonly _onDidReceive = new vscode.EventEmitter<FromWebviewMessage>();
@@ -187,6 +194,20 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
       display: block;
       margin: 10px 0 4px;
       opacity: 0.85;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 10px 0 4px;
+    }
+    .checkbox-row label {
+      margin: 0;
+      opacity: 1;
+    }
+    .checkbox-row input[type="checkbox"] {
+      accent-color: var(--vscode-button-background);
     }
 
     select,
@@ -330,6 +351,8 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
     <span class="value" id="stat-size">0 B</span>
     <span class="label">Tokens:</span>
     <span class="value" id="stat-tokens">~0</span>
+    <span class="label hidden" id="stat-diff-label">Diff files:</span>
+    <span class="value hidden" id="stat-diff-files">0</span>
   </div>
 
   <label for="format">Output format</label>
@@ -337,6 +360,16 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
     <option value="xml">XML (best for AI)</option>
     <option value="markdown">Markdown</option>
     <option value="plain">Plain text</option>
+  </select>
+
+  <div class="checkbox-row">
+    <input type="checkbox" id="diff-enabled" />
+    <label for="diff-enabled">Include git diff</label>
+  </div>
+  <select id="diff-scope" class="hidden">
+    <option value="working">Working (unstaged)</option>
+    <option value="staged">Staged only</option>
+    <option value="both">Both</option>
   </select>
 
   <div id="instructions-wrap" class="hidden">
@@ -366,7 +399,11 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
     const $files = document.getElementById('stat-files');
     const $size = document.getElementById('stat-size');
     const $tokens = document.getElementById('stat-tokens');
+    const $diffLabel = document.getElementById('stat-diff-label');
+    const $diffFiles = document.getElementById('stat-diff-files');
     const $format = document.getElementById('format');
+    const $diffEnabled = document.getElementById('diff-enabled');
+    const $diffScope = document.getElementById('diff-scope');
     const $insWrap = document.getElementById('instructions-wrap');
     const $ins = document.getElementById('instructions');
     const $btn = document.getElementById('generate');
@@ -382,6 +419,13 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
 
     $format.addEventListener('change', () => {
       vscode.postMessage({ type: 'formatChange', format: $format.value });
+    });
+    $diffEnabled.addEventListener('change', () => {
+      $diffScope.classList.toggle('hidden', !$diffEnabled.checked);
+      vscode.postMessage({ type: 'diffToggle', enabled: $diffEnabled.checked });
+    });
+    $diffScope.addEventListener('change', () => {
+      vscode.postMessage({ type: 'diffScopeChange', scope: $diffScope.value });
     });
     $ins.addEventListener('input', () => {
       clearTimeout(debounce);
@@ -483,6 +527,12 @@ export class ActionPanelProvider implements vscode.WebviewViewProvider {
           $size.textContent = msg.stats.sizeFormatted;
           $tokens.textContent = '~' + msg.stats.tokensFormatted;
           $format.value = msg.format;
+          $diffEnabled.checked = msg.gitDiffEnabled;
+          $diffScope.value = msg.diffScope;
+          $diffScope.classList.toggle('hidden', !msg.gitDiffEnabled);
+          $diffLabel.classList.toggle('hidden', !msg.gitDiffEnabled);
+          $diffFiles.classList.toggle('hidden', !msg.gitDiffEnabled);
+          $diffFiles.textContent = msg.stats.diffFileCount;
           if (msg.showCustomInstructions) {
             $insWrap.classList.remove('hidden');
             if ($ins.value !== msg.instructions) {

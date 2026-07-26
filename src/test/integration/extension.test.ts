@@ -55,6 +55,8 @@ describe('Configuration', () => {
     expect(config.get<boolean>('smartFilter')).to.equal(true);
     expect(config.get<string>('selectionMemory')).to.equal('lastOnly');
     expect(config.get<string>('binaryHandling')).to.equal('placeholder');
+    expect(config.get<boolean>('gitDiffEnabledByDefault')).to.equal(false);
+    expect(config.get<string>('gitDiffScope')).to.equal('working');
   });
 });
 
