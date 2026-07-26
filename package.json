@@ -2,7 +2,7 @@
   "name": "ai-handoff",
   "displayName": "AI Handoff",
   "description": "Select multiple files and generate a clean, structured handoff (directory tree + file contents) ready to paste into any AI chat — Claude, ChatGPT, Gemini, and more.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "RavinduKanchana",
   "engines": {
     "vscode": "^1.80.0"

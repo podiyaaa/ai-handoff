@@ -5,6 +5,12 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-27 (pre-release)
+
+### Added
+
+- **"Include git diff" in the action panel** — a checkbox next to the output format dropdown appends a git diff section to the handoff, with a scope dropdown: Working (unstaged), Staged only, or Both (rendered as separate labeled sections). Works additively alongside selected files, or on its own with nothing selected. Diffs are collected via the `git` CLI (no new dependency) across every repo in the workspace — each workspace folder is checked for its own repo, and folders that aren't repos themselves are scanned one level down for nested ones, so both true multi-root workspaces and a plain "folder of projects" opened as a single root are covered. When multiple repos contribute, each file's path is prefixed with its repo name to stay unambiguous. New settings: `aiHandoff.gitDiffEnabledByDefault` and `aiHandoff.gitDiffScope`.
+
 ## [0.2.0] — 2026-07-26
 
 ### Added
