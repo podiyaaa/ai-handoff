@@ -5,12 +5,16 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] — 2026-07-27 (pre-release)
+## [0.3.1] — 2026-07-28 (pre-release)
 
 ### Added
 
-- **"Include git diff" in the action panel** — a checkbox next to the output format dropdown appends a git diff section to the handoff, with a scope dropdown: Working (unstaged), Staged only, or Both (rendered as separate labeled sections). Scoped to the current file selection — only the diff for files you've actually ticked in the tree is included; with nothing selected, the diff section is empty. Diffs are collected via the `git` CLI (no new dependency) across every repo in the workspace — each workspace folder is checked for its own repo, and folders that aren't repos themselves are searched (at any depth, skipping junk paths) for nested ones, so a plain "folder of projects" — or a folder of folders of projects — opened as a single root is covered, not just true multi-root workspaces. Repo discovery is cached for the session (repo layouts rarely change) and can be forced to re-scan via the sidebar's "Refresh" button. When multiple repos contribute, each file's path is prefixed with its repo name to stay unambiguous. New settings: `aiHandoff.gitDiffEnabledByDefault` and `aiHandoff.gitDiffScope`.
 - **Background search index** — the sidebar search box now matches against an in-memory index built once by a background workspace walk, instead of re-reading directories from disk on every keystroke. Kept in sync automatically as files are created/deleted. By default the index skips the same junk paths as the smart filter (node_modules, .git, dist, build, lock files, etc.) so they don't clutter search results; new setting `aiHandoff.searchSkipJunkDirs` turns that off if you want everything searchable. Search still works immediately on a fresh window — it just falls back to the (slower) on-disk walk until the first background build finishes.
+
+### Changed
+
+- **Git diff scoped to the current file selection** — previously included changes across the whole workspace regardless of what was ticked in the tree; now only the diff for files you've actually selected is included, and it's empty with nothing selected.
+- **Nested git repo discovery now searches any depth** — a folder that isn't a repo itself used to be scanned only one level down for nested repos; it's now searched recursively (skipping junk paths, stopping at the first repo found per branch), so a "folder of folders of projects" opened as a single workspace root is covered too. Discovery is cached for the session and can be forced to re-scan via the sidebar's "Refresh" button.
 
 ### Removed
 
@@ -20,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Clearing the search box no longer force-expands the whole tree** — the auto-expand that reveals matching folders while a search is active was also firing once the box was cleared, which (with no filter left) meant a full, unbounded walk that opened every directory in the project. On a very large repo this was a serious hang. Auto-expand now only ever runs while a search query is active, so it stays bounded to the (small) match set; clearing the box leaves the tree's expand/collapse state as-is.
 - **General sidebar file tree lagginess** — every directory read (expanding a folder, refreshing, ticking a directory's checkbox to bulk-select it) used to hit disk fresh with no caching at all; now cached per-directory and invalidated only where a file actually changed. The file watcher also used to fire an immediate, unthrottled tree refresh on every single create/delete — a burst of filesystem activity (autosave, a linter writing cache files, git operations, an incremental build) meant one full refresh per event, each forcing VS Code to re-fetch every currently-expanded node. Now debounced (300ms) so a burst collapses into one refresh. The background search index's own rebuild also no longer fires a redundant full tree refresh when no search is active, since nothing displayed would have changed anyway.
+
+## [0.3.0] — 2026-07-27 (pre-release)
+
+### Added
+
+- **"Include git diff" in the action panel** — a checkbox next to the output format dropdown appends a git diff section to the handoff, with a scope dropdown: Working (unstaged), Staged only, or Both (rendered as separate labeled sections). Works additively alongside selected files, or on its own with nothing selected. Diffs are collected via the `git` CLI (no new dependency) across every repo in the workspace — each workspace folder is checked for its own repo, and folders that aren't repos themselves are scanned one level down for nested ones, so both true multi-root workspaces and a plain "folder of projects" opened as a single root are covered. When multiple repos contribute, each file's path is prefixed with its repo name to stay unambiguous. New settings: `aiHandoff.gitDiffEnabledByDefault` and `aiHandoff.gitDiffScope`.
 
 ## [0.2.0] — 2026-07-26
 
