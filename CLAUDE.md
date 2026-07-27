@@ -51,7 +51,7 @@ src/
 │   ├── token-estimator.ts
 │   └── search-filter.ts  # Sidebar search query parsing (name / ext: / re:) + matching
 ├── ui/                   # VS Code API — display only, no business logic
-│   ├── file-tree-provider.ts  # Sidebar TreeView with checkboxes (lazy directory walk)
+│   ├── file-tree-provider.ts  # Sidebar TreeView with checkboxes (lazy directory walk + background search index)
 │   ├── search-bar-panel.ts    # Webview pinned above the tree — live search input
 │   ├── action-panel.ts        # Webview sidebar panel (vanilla HTML/CSS/JS, no framework)
 │   └── output-picker.ts       # QuickPick for clipboard / file / tab dispatch
@@ -69,7 +69,7 @@ src/
 3. `generateHandoff()` in `handoff-generator.ts` runs the pipeline:
    - `FilterChain.decide()` categorises each file as included or skipped (with reason).
    - `readFile()` reads text / detects binaries.
-   - If git diff is enabled, `readGitDiffForWorkspace()` collects diffs across the workspace and is spliced in alongside the selected files — the two are independent and either can be empty.
+   - If git diff is enabled, `readGitDiffForWorkspace()` collects diffs across every repo in the workspace, then `generateHandoff()` filters the result down to just the files in the current selection (matched by resolved absolute path, via `fs.realpath`, against each diff entry's `repoRoot` + repo-relative path) — an empty selection yields an empty diff section.
    - `formatHandoff()` renders the final text string.
 4. `pickDestinations()` prompts for clipboard / file / tab, then `dispatchHandoff()` delivers.
 
@@ -84,7 +84,8 @@ esbuild bundles `src/extension.ts` → `dist/extension.js` (CJS, `vscode` extern
 - `SelectionStore` in `services/selection-store.ts` ships with `InMemoryMemento` — use it in tests instead of mocking `vscode.Memento`.
 - The action panel webview is intentionally framework-free; all styling uses VS Code CSS variables for automatic theme support.
 - File overrides (user clicks "include anyway", or ticks one specific file's own checkbox in the sidebar — see `FileTreeProvider.onDidToggleIndividualFile`) bypass path-based filters but **not** the size limit — this is intentional. Ticking a whole *directory's* checkbox does **not** auto-override — bulk-selecting a folder must stay subject to the smart filter/gitignore, or it could silently drag in its `node_modules`.
-- Git diff repo discovery (`git-diff-reader.ts`) is anchored to VS Code workspace folders, each checked for its own repo — but a folder that isn't a repo itself is scanned **one level down** (not recursively) for nested repos, so opening a plain "folder of projects" as a single workspace root still finds each project's repo. Shells out via `execFile` (never a shell string) — never `simple-git`/`isomorphic-git`, to stay dependency-light and offline-first.
+- Git diff repo discovery (`git-diff-reader.ts`) is anchored to VS Code workspace folders, each checked for its own repo — a folder that isn't a repo itself is searched recursively (any depth, skipping smart-filter junk dirs, stopping at the first repo found per branch) for nested repos, so opening a plain "folder of projects" — or a folder of folders of projects — as a single workspace root still finds each project's repo. `RepoRootCache` memoizes this per folder for the extension's session (repo layouts rarely change); the sidebar's "Refresh" button invalidates it. Shells out via `execFile` (never a shell string) — never `simple-git`/`isomorphic-git`, to stay dependency-light and offline-first.
+- `FileTreeProvider`'s search index is the one deliberate exception to "lazy, no cost up front": `buildSearchIndex()` walks the whole workspace once in the background so search is an in-memory scan instead of a live filesystem walk per keystroke. Falls back to the (slower) on-disk walk until that first build finishes. Kept in sync via the existing file watcher, debounced so a burst of creates/deletes (e.g. `npm install`) triggers one rebuild, not one per event.
 - Commit messages follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, etc.).
 
 ## Git workflow
