@@ -84,16 +84,6 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "aiHandoff.expandAllFiles",
-        "title": "AI Handoff: Expand All",
-        "icon": "$(expand-all)"
-      },
-      {
-        "command": "aiHandoff.collapseAllFiles",
-        "title": "AI Handoff: Collapse All",
-        "icon": "$(collapse-all)"
-      },
-      {
         "command": "aiHandoff.clearSelection",
         "title": "Clear selection",
         "icon": "$(clear-all)"
@@ -123,16 +113,6 @@
           "command": "aiHandoff.refreshTree",
           "when": "view == aiHandoff.fileTree",
           "group": "navigation@1"
-        },
-        {
-          "command": "aiHandoff.collapseAllFiles",
-          "when": "view == aiHandoff.fileTree && !aiHandoff.treeAllCollapsed",
-          "group": "navigation@2"
-        },
-        {
-          "command": "aiHandoff.expandAllFiles",
-          "when": "view == aiHandoff.fileTree && aiHandoff.treeAllCollapsed",
-          "group": "navigation@2"
         },
         {
           "command": "aiHandoff.clearSelection",
@@ -248,6 +228,11 @@
           ],
           "default": "working",
           "description": "Default scope for the git diff included in the handoff."
+        },
+        "aiHandoff.searchSkipJunkDirs": {
+          "type": "boolean",
+          "default": true,
+          "description": "When building the sidebar search index, skip common junk paths (node_modules, .git, dist, build, lock files, etc. — the same defaults as the smart filter) so they don't clutter search results. Turn off to make everything searchable."
         }
       }
     }

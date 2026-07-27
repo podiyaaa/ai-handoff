@@ -21,6 +21,7 @@ import type {
   SelectedFile,
   SelectionMemoryMode,
 } from './core/types';
+import { RepoRootCache } from './services/git-diff-reader';
 import { generateHandoff } from './services/handoff-generator';
 import { SelectionStore } from './services/selection-store';
 import { ActionPanelProvider, formatStatsForPanel } from './ui/action-panel';
@@ -36,6 +37,8 @@ interface SessionState {
   lastSkipped: Array<{ relativePath: string; reason: string; detail?: string }>;
   gitDiffEnabled: boolean;
   diffScope: DiffScope;
+  /** Memoizes nested-repo discovery for git diff — see RepoRootCache. Invalidated by the sidebar's "Refresh" button. */
+  repoRootCache: RepoRootCache;
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -62,41 +65,53 @@ export function activate(context: vscode.ExtensionContext): void {
     lastSkipped: [],
     gitDiffEnabled: getConfig('gitDiffEnabledByDefault', false),
     diffScope: getConfig<DiffScope>('gitDiffScope', 'working'),
+    repoRootCache: new RepoRootCache(),
   };
 
   // -- Tree provider --
   // Pass every workspace folder (not just the first) so multi-root
   // workspaces can select files from all of them, not just folders[0].
-  const treeProvider = new FileTreeProvider(vscode.workspace.workspaceFolders, initialSelection);
+  const treeProvider = new FileTreeProvider(
+    vscode.workspace.workspaceFolders,
+    initialSelection,
+    getConfig('searchSkipJunkDirs', true),
+  );
   const treeView = vscode.window.createTreeView('aiHandoff.fileTree', {
     treeDataProvider: treeProvider,
-    // We provide our own single Collapse All / Expand All toggle (below)
-    // instead of the native non-toggling button.
-    showCollapseAll: false,
     canSelectMany: false,
   });
-  // The tree starts fully collapsed (no auto-expand-on-startup), so the
-  // toggle button should start showing "Expand All" — the only meaningful
-  // first action — rather than defaulting to "Collapse All" just because
-  // the context key is unset (which the view/title `when` clause reads as
-  // "not collapsed", regardless of the tree's actual initial state).
-  void vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', true);
   // Native checkbox events
   treeView.onDidChangeCheckboxState(async (e) => {
     await treeProvider.handleCheckboxChange(e.items);
   });
 
-  // Serializes revealAllDirectories calls: a full-tree walk (e.g. after
-  // clearing a search) has real UI latency per reveal() call, so it isn't
-  // instant. If another search change arrives while a walk is still
-  // running, two overlapping walks would both be calling reveal() against
-  // the same tree at once — coalesce instead: note that another pass is
-  // needed and run exactly one more once the current walk finishes,
-  // reflecting whatever the search state is by then (rather than queueing
-  // every intermediate request, which could pile up under rapid typing).
+  // -- Background search index --
+  // Kick off the initial build with a progress indicator (this is the one
+  // walk that can take a while on a huge project); subsequent rebuilds
+  // triggered by the file watcher happen silently in the background.
+  void vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Window, title: 'AI Handoff: indexing files for search…' },
+    () => treeProvider.buildSearchIndex(),
+  );
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('aiHandoff.searchSkipJunkDirs')) {
+        void treeProvider.setSkipJunkInIndex(getConfig('searchSkipJunkDirs', true));
+      }
+    }),
+  );
+
+  // Serializes revealAllDirectories calls: a search-match walk has real UI
+  // latency per reveal() call, so it isn't instant. If another search change
+  // arrives while a walk is still running, two overlapping walks would both
+  // be calling reveal() against the same tree at once — coalesce instead:
+  // note that another pass is needed and run exactly one more once the
+  // current walk finishes, reflecting whatever the search state is by then
+  // (rather than queueing every intermediate request, which could pile up
+  // under rapid typing).
   let revealInFlight: Thenable<void> | undefined;
   let revealAgainRequested = false;
-  async function requestRevealAllDirectories(): Promise<void> {
+  async function requestRevealMatchingDirectories(): Promise<void> {
     if (revealInFlight) {
       revealAgainRequested = true;
       return;
@@ -108,13 +123,10 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     try {
       await revealInFlight;
-      // Whatever triggered this (search or the Expand All button), things
-      // are now expanded — show "Collapse All" as the next available action.
-      await vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', false);
     } finally {
       revealInFlight = undefined;
       if (revealAgainRequested) {
-        await requestRevealAllDirectories();
+        await requestRevealMatchingDirectories();
       }
     }
   }
@@ -139,15 +151,23 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     treeProvider.setSearchQuery(query);
+    if (!query) {
+      // Search box cleared — do NOT reveal anything. With no active query,
+      // getChildren() returns the entire, unfiltered tree, so forcing every
+      // directory open here would walk (and expand) the whole project. On a
+      // huge repo that's a real hang, not just a cosmetic snap-open. Leave
+      // whatever expand/collapse state the tree already has alone; only an
+      // explicit user action (the disclosure arrow) should open a directory
+      // from here on.
+      return;
+    }
     // Reveal every directory getChildren() currently returns — while a
     // search is active that's just the matches (non-matching directories
-    // are already excluded), and once the search is cleared it's the whole
-    // tree, so clearing shows everything expanded rather than snapping back
-    // to whatever collapsed state existed before. This always wins over any
-    // prior manual "Collapse All" — reveal() forces a directory open
-    // regardless of its current state — and nothing here ever collapses
-    // anything; only an explicit user action (the disclosure arrow or
-    // "Collapse All") does that.
+    // are already excluded by applySearchFilter), so this walk is bounded by
+    // the result set, not the whole tree. This always wins over any prior
+    // manual collapse — reveal() forces a directory open regardless of its
+    // current state — and nothing here ever collapses anything; only an
+    // explicit user action (the disclosure arrow) does that.
     //
     // An earlier investigation wrongly suspected this (and, before it, an
     // id-churn approach) of causing checkbox clicks to get misrouted to the
@@ -169,7 +189,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // internal refresh handling rather than any bug in this code. A short
     // delay lets that settle first.
     await new Promise((resolve) => setTimeout(resolve, 75));
-    await requestRevealAllDirectories();
+    await requestRevealMatchingDirectories();
   });
 
   // -- Action panel --
@@ -317,21 +337,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('aiHandoff.refreshTree', () => {
       treeProvider.refresh();
-    }),
-    vscode.commands.registerCommand('aiHandoff.expandAllFiles', async () => {
-      await requestRevealAllDirectories();
-    }),
-    vscode.commands.registerCommand('aiHandoff.collapseAllFiles', async () => {
-      // The same internal command the native "Collapse All" button uses.
-      // Undocumented VS Code internals, so guard against it disappearing in
-      // some future VS Code version rather than throwing an unhandled
-      // rejection.
-      try {
-        await vscode.commands.executeCommand('workbench.actions.treeView.aiHandoff.fileTree.collapseAll');
-      } catch (e) {
-        console.error('[AI Handoff] collapseAll command failed:', e);
-      }
-      await vscode.commands.executeCommand('setContext', 'aiHandoff.treeAllCollapsed', true);
+      // Repo layouts rarely change mid-session, so git diff's nested-repo
+      // discovery is cached — this is the manual escape hatch for the rare
+      // case a repo got added/moved/removed since the cache was built.
+      session.repoRootCache.invalidate();
     }),
     vscode.commands.registerCommand('aiHandoff.clearSelection', async () => {
       await treeProvider.clearSelection();
@@ -444,10 +453,9 @@ function enforceOffline(): void {
  * Force every directory currently returned by getChildren() open, via
  * TreeView.reveal() (the documented API for this) rather than any item-
  * identity trick — so it can't interfere with an in-flight checkbox click.
- * Under an active search, getChildren() already excludes non-matching
- * directories, so this only reveals matches; with no search, it walks (and
- * opens) the whole tree — used by both "Expand All" and search-triggered
- * auto-expand.
+ * Only ever called while a search query is active, so getChildren() already
+ * excludes non-matching directories — this reveals matches, never the whole
+ * tree (see the `if (!query) return;` guard at the call site).
  *
  * A single reveal() (or getChildren()) failure must not abort revealing
  * everything else — this is a recursive, sibling-by-sibling walk, and an
@@ -549,7 +557,13 @@ async function refreshPanel(
     .filter((f): f is SelectedFile => f !== undefined);
 
   const opts = getHandoffOptions(session);
-  const result = await generateHandoff(selectedFiles, opts, workspaceRoot, getWorkspaceFolders());
+  const result = await generateHandoff(
+    selectedFiles,
+    opts,
+    workspaceRoot,
+    getWorkspaceFolders(),
+    session.repoRootCache,
+  );
 
   session.lastSkipped = result.skipped.map((s) => ({
     relativePath: s.relativePath,
@@ -581,7 +595,13 @@ async function doGenerateAndDispatch(
   panel.setBusy(true);
   try {
     const opts = getHandoffOptions(session);
-    const result = await generateHandoff(selectedFiles, opts, workspaceRoot, getWorkspaceFolders());
+    const result = await generateHandoff(
+      selectedFiles,
+      opts,
+      workspaceRoot,
+      getWorkspaceFolders(),
+      session.repoRootCache,
+    );
     const hasDiffContent = (result.diff?.files.length ?? 0) > 0;
 
     if (result.included.length === 0 && !hasDiffContent) {
@@ -653,7 +673,10 @@ async function runGenerate(
   }
 
   const selection = treeProvider.getSelection();
-  if (selection.length === 0 && !session.gitDiffEnabled) {
+  if (selection.length === 0) {
+    // Git diff is scoped to the current selection (see generateHandoff), so
+    // an empty selection can no longer produce a diff-only handoff either —
+    // there'd be nothing for the diff to match against.
     panel.showError('Select at least one file before generating.');
     return;
   }

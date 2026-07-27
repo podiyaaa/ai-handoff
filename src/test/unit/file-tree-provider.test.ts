@@ -258,6 +258,90 @@ describe('FileTreeProvider — search filter', () => {
   });
 });
 
+describe('FileTreeProvider — background search index', () => {
+  let root: string;
+  let provider: FileTreeProvider;
+
+  beforeEach(async () => {
+    root = await makeSearchRoot();
+  });
+  afterEach(async () => {
+    provider.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('produces the same search results as the on-disk fallback once built', async () => {
+    provider = new FileTreeProvider([fakeFolder(root, 0)]);
+    await provider.buildSearchIndex();
+    provider.setSearchQuery(parseSearchQuery('login').query);
+    expect(await collectVisiblePaths(provider)).to.deep.equal(
+      ['src', 'src/auth', 'src/auth/login.ts', 'src/auth/login.test.ts'].sort(),
+    );
+  });
+
+  it('skips smart-filter junk paths by default', async () => {
+    await fs.mkdir(path.join(root, 'node_modules', 'some-pkg'), { recursive: true });
+    await fs.writeFile(path.join(root, 'node_modules', 'some-pkg', 'login.js'), '// vendored');
+    provider = new FileTreeProvider([fakeFolder(root, 0)]);
+    await provider.buildSearchIndex();
+    provider.setSearchQuery(parseSearchQuery('login').query);
+    const visible = await collectVisiblePaths(provider);
+    expect(visible).to.not.include('node_modules/some-pkg/login.js');
+    expect(visible).to.include('src/auth/login.ts');
+  });
+
+  it('includes junk paths when constructed with skipJunkInIndex disabled', async () => {
+    await fs.mkdir(path.join(root, 'node_modules', 'some-pkg'), { recursive: true });
+    await fs.writeFile(path.join(root, 'node_modules', 'some-pkg', 'login.js'), '// vendored');
+    provider = new FileTreeProvider([fakeFolder(root, 0)], [], false);
+    await provider.buildSearchIndex();
+    provider.setSearchQuery(parseSearchQuery('login').query);
+    expect(await collectVisiblePaths(provider)).to.include('node_modules/some-pkg/login.js');
+  });
+
+  it('setSkipJunkInIndex(false) rebuilds and surfaces previously-skipped junk paths', async () => {
+    await fs.mkdir(path.join(root, 'node_modules'), { recursive: true });
+    await fs.writeFile(path.join(root, 'node_modules', 'login.js'), '// vendored');
+    provider = new FileTreeProvider([fakeFolder(root, 0)]);
+    await provider.buildSearchIndex();
+    provider.setSearchQuery(parseSearchQuery('login').query);
+    expect(await collectVisiblePaths(provider)).to.not.include('node_modules/login.js');
+
+    await provider.setSkipJunkInIndex(false);
+    expect(await collectVisiblePaths(provider)).to.include('node_modules/login.js');
+  });
+
+  it('a stale in-flight build does not clobber a newer one', async () => {
+    provider = new FileTreeProvider([fakeFolder(root, 0)]);
+    const stale = provider.buildSearchIndex();
+    const fresh = provider.buildSearchIndex();
+    await Promise.all([stale, fresh]);
+    provider.setSearchQuery(parseSearchQuery('login').query);
+    // If the stale build had won, the index would still be valid (same
+    // workspace, same result) — this mainly guards against a crash/throw
+    // from the generation-check path, and confirms search still works.
+    expect(await collectVisiblePaths(provider)).to.deep.equal(
+      ['src', 'src/auth', 'src/auth/login.ts', 'src/auth/login.test.ts'].sort(),
+    );
+  });
+
+  it('prefixes index entries with the folder name in a multi-root workspace, matching on-disk rendering', async () => {
+    const rootB = await makeSearchRoot();
+    try {
+      provider = new FileTreeProvider([fakeFolder(root, 0), fakeFolder(rootB, 1)]);
+      await provider.buildSearchIndex();
+      provider.setSearchQuery(parseSearchQuery('login').query);
+      const rootName = path.basename(root);
+      const rootBName = path.basename(rootB);
+      const visible = await collectVisiblePaths(provider);
+      expect(visible).to.include(`${rootName}/src/auth/login.ts`);
+      expect(visible).to.include(`${rootBName}/src/auth/login.ts`);
+    } finally {
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('FileTreeProvider — directory collapsibleState defaults', () => {
   let root: string;
   let provider: FileTreeProvider;

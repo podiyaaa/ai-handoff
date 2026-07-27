@@ -2,8 +2,18 @@
  * File tree provider — the sidebar TreeView with checkboxes.
  *
  * Walks the workspace lazily (children-on-demand) so large projects don't
- * pay the cost up front. Tracks a Set of selected relative paths and exposes
+ * pay the cost up front. Every directory read is cached (`dirListingCache`,
+ * invalidated per-directory by the file watcher) so repeated renders,
+ * refreshes, and directory-checkbox toggles don't keep re-reading the same
+ * directories from disk. Tracks a Set of selected relative paths and exposes
  * change events for the action panel to subscribe to.
+ *
+ * Search is the one deliberate exception to "lazy, no cost up front": a
+ * background index (`buildSearchIndex`) walks the whole workspace once so
+ * search matching is an in-memory scan instead of a live filesystem walk on
+ * every keystroke. Until that first walk finishes, search falls back to the
+ * (slower) on-disk walk, so search still works immediately — it's just not
+ * yet fast.
  *
  * Selection semantics:
  *   - Ticking a file selects just that file
@@ -16,10 +26,17 @@
  * be skipped without losing visibility.
  */
 
+import ignore, { Ignore } from 'ignore';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { FilterChain } from '../core/filter';
+import { DEFAULT_SMART_FILTER_PATTERNS, FilterChain } from '../core/filter';
 import { matchesSearchQuery, ParsedSearchQuery } from '../core/search-filter';
+
+/** A single file entry in the background search index. */
+interface SearchIndexEntry {
+  relativePath: string;
+  name: string;
+}
 
 /**
  * Internal cache entry. Built lazily as the user expands directories.
@@ -125,6 +142,21 @@ export class FileTreeProvider
   /** One file watcher per workspace folder, so we refresh on file changes. */
   private watchers: vscode.FileSystemWatcher[] = [];
 
+  /**
+   * Lazy, per-directory cache of `vscode.workspace.fs.readDirectory()`
+   * results — shared by tree rendering (`readDirectory`), the search
+   * fallback walk, and directory bulk-select (`walk`), all three of which
+   * used to hit disk fresh on every single call. Unlike `searchIndex` below,
+   * this stays fully lazy (only ever holds directories actually visited) —
+   * it doesn't compromise "no cost up front" for the plain tree. Invalidated
+   * per-directory by the file watcher, not wholesale, since a create/delete
+   * only changes its immediate parent's listing.
+   */
+  private dirListingCache = new Map<string, [string, vscode.FileType][]>();
+
+  /** Debounces the tree refresh fired on file-watcher events — see `scheduleRefresh`. */
+  private refreshDebounceHandle: ReturnType<typeof setTimeout> | undefined;
+
   /** Optional filter — used to grey out items that would be skipped. */
   private previewFilter: FilterChain | undefined;
 
@@ -135,13 +167,37 @@ export class FileTreeProvider
    */
   private searchQuery: ParsedSearchQuery | undefined;
 
+  // -- Background search index --------------------------------------------
+  //
+  // Search matching (`directoryHasMatchByWalking`) re-reads a directory's
+  // entire subtree from disk on every keystroke, with no caching anywhere —
+  // fine for a small project, a real hang on a huge one (every character
+  // typed re-walks large parts of the tree from disk). `searchIndex` is a
+  // flat, in-memory list of every file's relative path, built once by a
+  // background walk and kept in sync via the file watcher below, so search
+  // becomes an in-memory scan instead of a filesystem walk. Until the first
+  // build finishes (or if it's disabled), `searchIndex` stays undefined and
+  // callers fall back to the on-disk walk.
+  private searchIndex: SearchIndexEntry[] | undefined;
+  /** Files matching the active query, once `searchIndex` is ready. */
+  private indexMatchedFiles: Set<string> | undefined;
+  /** Every ancestor directory of a matched file, once `searchIndex` is ready. */
+  private indexMatchedAncestorDirs: Set<string> | undefined;
+  /** Bumped on every rebuild so a stale in-flight walk can detect it's been superseded and discard its result instead of clobbering a newer one. */
+  private indexBuildGeneration = 0;
+  /** Whether the index build should skip smart-filter junk paths (`aiHandoff.searchSkipJunkDirs`). */
+  private skipJunkInIndex = true;
+  private rebuildDebounceHandle: ReturnType<typeof setTimeout> | undefined;
+
   private readonly workspaceFolders: readonly vscode.WorkspaceFolder[];
 
   constructor(
     workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined,
     initialSelection: string[] = [],
+    skipJunkInIndex = true,
   ) {
     this.workspaceFolders = workspaceFolders ?? [];
+    this.skipJunkInIndex = skipJunkInIndex;
     for (const p of initialSelection) {
       this.selected.add(p);
     }
@@ -198,17 +254,32 @@ export class FileTreeProvider
     return this.applySearchFilter(items);
   }
 
+  /**
+   * Read a directory's entries, via the shared cache. Errors are never
+   * cached (returns `[]` but doesn't remember it), so a transient failure
+   * gets retried on the next call rather than sticking forever.
+   */
+  private async readDirCached(absDir: string): Promise<[string, vscode.FileType][]> {
+    const cached = this.dirListingCache.get(absDir);
+    if (cached) {
+      return cached;
+    }
+    let entries: [string, vscode.FileType][];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(absDir));
+    } catch {
+      return [];
+    }
+    this.dirListingCache.set(absDir, entries);
+    return entries;
+  }
+
   private async readDirectory(
     parentAbs: string,
     folderRoot: string,
     folderName: string | undefined,
   ): Promise<FileTreeItem[]> {
-    let entries: [string, vscode.FileType][];
-    try {
-      entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(parentAbs));
-    } catch {
-      return [];
-    }
+    const entries = await this.readDirCached(parentAbs);
 
     const items: FileTreeItem[] = [];
     for (const [name, type] of entries) {
@@ -320,12 +391,43 @@ export class FileTreeProvider
    */
   setSearchQuery(query: ParsedSearchQuery | undefined): void {
     this.searchQuery = query;
+    this.recomputeIndexMatches();
     this._onDidChangeTreeData.fire();
   }
 
   /** The active search query, if any. */
   getSearchQuery(): ParsedSearchQuery | undefined {
     return this.searchQuery;
+  }
+
+  /**
+   * Re-run the active query against `searchIndex` (if it's built) and cache
+   * the result. Done once per query change rather than per getChildren()
+   * call — getChildren() runs once per currently-rendered node, so without
+   * this cache the same query would get re-scanned against the whole index
+   * once per visible node.
+   */
+  private recomputeIndexMatches(): void {
+    if (!this.searchIndex || !this.searchQuery) {
+      this.indexMatchedFiles = undefined;
+      this.indexMatchedAncestorDirs = undefined;
+      return;
+    }
+    const query = this.searchQuery;
+    const matchedFiles = new Set<string>();
+    const matchedAncestorDirs = new Set<string>();
+    for (const entry of this.searchIndex) {
+      if (!matchesSearchQuery(entry.relativePath, entry.name, query)) {
+        continue;
+      }
+      matchedFiles.add(entry.relativePath);
+      const parts = entry.relativePath.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        matchedAncestorDirs.add(parts.slice(0, i).join('/'));
+      }
+    }
+    this.indexMatchedFiles = matchedFiles;
+    this.indexMatchedAncestorDirs = matchedAncestorDirs;
   }
 
   /**
@@ -341,11 +443,19 @@ export class FileTreeProvider
     const kept: FileTreeItem[] = [];
     for (const item of items) {
       if (item.data.isDirectory) {
-        if (await this.directoryHasMatch(item.data, query)) {
+        const hasMatch = this.indexMatchedAncestorDirs
+          ? this.indexMatchedAncestorDirs.has(item.data.relativePath)
+          : await this.directoryHasMatchByWalking(item.data, query);
+        if (hasMatch) {
           kept.push(item);
         }
-      } else if (matchesSearchQuery(item.data.relativePath, item.data.name, query)) {
-        kept.push(item);
+      } else {
+        const isMatch = this.indexMatchedFiles
+          ? this.indexMatchedFiles.has(item.data.relativePath)
+          : matchesSearchQuery(item.data.relativePath, item.data.name, query);
+        if (isMatch) {
+          kept.push(item);
+        }
       }
     }
     return kept;
@@ -353,15 +463,12 @@ export class FileTreeProvider
 
   /**
    * Recursively check whether a directory contains at least one file
-   * matching the query. Short-circuits on the first match found.
+   * matching the query, by walking it from disk. Short-circuits on the
+   * first match found. Fallback used only while `searchIndex` isn't ready
+   * yet (index still building, or disabled) — see `applySearchFilter`.
    */
-  private async directoryHasMatch(dirData: NodeData, query: ParsedSearchQuery): Promise<boolean> {
-    let entries: [string, vscode.FileType][];
-    try {
-      entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(dirData.absolutePath));
-    } catch {
-      return false;
-    }
+  private async directoryHasMatchByWalking(dirData: NodeData, query: ParsedSearchQuery): Promise<boolean> {
+    const entries = await this.readDirCached(dirData.absolutePath);
     for (const [name, type] of entries) {
       const absolutePath = path.join(dirData.absolutePath, name);
       const isDirectory = (type & vscode.FileType.Directory) !== 0;
@@ -375,7 +482,7 @@ export class FileTreeProvider
           folderRoot: dirData.folderRoot,
           folderName: dirData.folderName,
         };
-        if (await this.directoryHasMatch(childData, query)) {
+        if (await this.directoryHasMatchByWalking(childData, query)) {
           return true;
         }
       } else if (matchesSearchQuery(relativePath, name, query)) {
@@ -521,6 +628,117 @@ export class FileTreeProvider
     return this.previewFilter;
   }
 
+  /**
+   * Enable/disable skipping smart-filter junk paths (node_modules, .git,
+   * dist, build, lock files, etc.) when building the search index —
+   * `aiHandoff.searchSkipJunkDirs`. Triggers a rebuild if the value actually
+   * changed, since it changes what the existing index would contain. Returns
+   * the rebuild's promise so callers that care (e.g. tests) can await it;
+   * fire-and-forget callers (the config-change listener) are free to ignore it.
+   */
+  async setSkipJunkInIndex(value: boolean): Promise<void> {
+    if (this.skipJunkInIndex === value) {
+      return;
+    }
+    this.skipJunkInIndex = value;
+    await this.buildSearchIndex();
+  }
+
+  /**
+   * Walk every workspace folder once, building a flat list of every file's
+   * relative path for instant in-memory search matching (see `searchIndex`
+   * above). Safe to call repeatedly — e.g. from the file watcher below —
+   * `indexBuildGeneration` ensures only the most recently *started* call
+   * ever commits its result, so overlapping walks can't race and leave a
+   * stale, partially-rebuilt index in place.
+   */
+  async buildSearchIndex(): Promise<void> {
+    const generation = ++this.indexBuildGeneration;
+    const junkIgnore: Ignore | null = this.skipJunkInIndex
+      ? ignore().add([...DEFAULT_SMART_FILTER_PATTERNS])
+      : null;
+
+    // Match toRelative()'s convention: only prefix with the folder name in a
+    // multi-root workspace — a single-root workspace's paths must stay
+    // unprefixed, or they won't line up with the (unprefixed) relativePath
+    // on-disk rendering uses to check `indexMatchedFiles`/`indexMatchedAncestorDirs`.
+    const multiRoot = this.workspaceFolders.length > 1;
+    const out: SearchIndexEntry[] = [];
+    for (const folder of this.workspaceFolders) {
+      await this.walkForIndex(folder.uri.fsPath, multiRoot ? folder.name : undefined, '', junkIgnore, out);
+    }
+
+    if (generation !== this.indexBuildGeneration) {
+      // Superseded by a newer build (workspace changed, setting toggled, or
+      // another file-watcher-triggered rebuild started) — discard.
+      return;
+    }
+    this.searchIndex = out;
+    this.recomputeIndexMatches();
+    // Only a search in progress can actually change what's rendered — with
+    // no active query, applySearchFilter() is a no-op regardless of what the
+    // index now contains, so firing a full refresh here would just be an
+    // expensive no-op UI refresh (VS Code re-fetching every expanded node).
+    // Structural changes (a file/folder appearing or disappearing) are
+    // already covered by the watcher's own (debounced) refresh below.
+    if (this.searchQuery) {
+      this._onDidChangeTreeData.fire();
+    }
+  }
+
+  /**
+   * Recursive walk for one workspace folder. `folderRelDir` is the path
+   * relative to *this folder's own root* (no multi-root folder-name prefix)
+   * — that's what junk patterns like `node_modules/` need to be tested
+   * against, since a workspace folder that happens to be named e.g. `dist`
+   * must not itself get excluded.
+   */
+  private async walkForIndex(
+    absDir: string,
+    folderName: string | undefined,
+    folderRelDir: string,
+    junkIgnore: Ignore | null,
+    out: SearchIndexEntry[],
+  ): Promise<void> {
+    let entries: [string, vscode.FileType][];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(absDir));
+    } catch {
+      return;
+    }
+    for (const [name, type] of entries) {
+      if (name === '.' || name === '..') {
+        continue;
+      }
+      const isDirectory = (type & vscode.FileType.Directory) !== 0;
+      const folderRelPath = folderRelDir ? `${folderRelDir}/${name}` : name;
+      if (junkIgnore?.ignores(isDirectory ? `${folderRelPath}/` : folderRelPath)) {
+        continue;
+      }
+      const absPath = path.join(absDir, name);
+      if (isDirectory) {
+        await this.walkForIndex(absPath, folderName, folderRelPath, junkIgnore, out);
+      } else if ((type & vscode.FileType.File) !== 0) {
+        const relativePath = folderName ? `${folderName}/${folderRelPath}` : folderRelPath;
+        out.push({ relativePath, name });
+      }
+    }
+  }
+
+  /**
+   * Coalesce file-watcher-triggered rebuilds: a burst of creates/deletes
+   * (e.g. `npm install`, a branch checkout) would otherwise trigger a full
+   * re-walk per event. Debounced the same way `SearchBarProvider` debounces
+   * keystrokes, just longer — these bursts play out over seconds, not
+   * milliseconds.
+   */
+  private scheduleIndexRebuild(): void {
+    clearTimeout(this.rebuildDebounceHandle);
+    this.rebuildDebounceHandle = setTimeout(() => {
+      void this.buildSearchIndex();
+    }, 2000);
+  }
+
   // -- Helpers -----------------------------------------------------------
 
   /**
@@ -610,12 +828,7 @@ export class FileTreeProvider
   }
 
   private async walk(dir: string, accumulator: string[]): Promise<void> {
-    let entries: [string, vscode.FileType][];
-    try {
-      entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(dir));
-    } catch {
-      return;
-    }
+    const entries = await this.readDirCached(dir);
     for (const [name, type] of entries) {
       const child = path.join(dir, name);
       if ((type & vscode.FileType.Directory) !== 0) {
@@ -626,17 +839,43 @@ export class FileTreeProvider
     }
   }
 
+  /**
+   * Debounces the tree refresh fired on file-watcher events. A single
+   * create/delete used to fire `_onDidChangeTreeData` immediately and
+   * unconditionally — fine for one event, but a burst (autosave, a linter
+   * writing cache files, git operations, an incremental build) fired one
+   * full refresh per event back-to-back, each making VS Code re-fetch every
+   * currently-expanded node. Much shorter than the index rebuild's own
+   * debounce (`scheduleIndexRebuild`) since this only re-renders already-
+   * cached/cheap data, not a full disk walk — it just needs to coalesce a
+   * burst, not protect against expensive work.
+   */
+  private scheduleRefresh(): void {
+    clearTimeout(this.refreshDebounceHandle);
+    this.refreshDebounceHandle = setTimeout(() => {
+      this._onDidChangeTreeData.fire();
+    }, 300);
+  }
+
   private setupWatcher(root: string): void {
     const pattern = new vscode.RelativePattern(root, '**/*');
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-    const refresh = (): void => this._onDidChangeTreeData.fire();
-    watcher.onDidCreate(refresh);
-    watcher.onDidDelete(refresh);
+    const onFsEvent = (uri: vscode.Uri): void => {
+      // A create/delete only changes its immediate parent's listing —
+      // invalidate just that entry rather than the whole cache.
+      this.dirListingCache.delete(path.dirname(uri.fsPath));
+      this.scheduleRefresh();
+      this.scheduleIndexRebuild();
+    };
+    watcher.onDidCreate(onFsEvent);
+    watcher.onDidDelete(onFsEvent);
     // Don't refresh on every keystroke — onDidChange is too noisy.
     this.watchers.push(watcher);
   }
 
   dispose(): void {
+    clearTimeout(this.rebuildDebounceHandle);
+    clearTimeout(this.refreshDebounceHandle);
     for (const watcher of this.watchers) {
       watcher.dispose();
     }
