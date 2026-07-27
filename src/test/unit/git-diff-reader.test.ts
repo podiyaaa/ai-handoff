@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { readGitDiffForRepo, readGitDiffForWorkspace } from '../../services/git-diff-reader';
+import { readGitDiffForRepo, readGitDiffForWorkspace, RepoRootCache } from '../../services/git-diff-reader';
 
 function git(cwd: string, args: string[]): void {
   execFileSync('git', args, { cwd });
@@ -239,7 +239,7 @@ describe('readGitDiffForWorkspace', () => {
     }
   });
 
-  it('discovers nested repos one level down when the workspace folder itself is not a repo', async () => {
+  it('discovers nested repos when the workspace folder itself is not a repo', async () => {
     // Reproduces opening a plain "folder of projects" as a single-folder
     // workspace, where the folder itself has no .git but its immediate
     // children (service-a, service-b) are each their own repo.
@@ -289,6 +289,121 @@ describe('readGitDiffForWorkspace', () => {
         'working',
       );
       expect(result.error).to.equal('no-repos-found');
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('discovers repos nested more than one level down (a category folder containing project folders)', async () => {
+    // Mirrors the reported bug: workspace-root/03-name-collision/service-a/.git
+    // — the repo is two levels below the workspace folder, not one.
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-parent-'));
+    try {
+      const serviceA = path.join(parent, '03-name-collision', 'service-a');
+      const serviceB = path.join(parent, '03-name-collision', 'service-b');
+      await fs.mkdir(serviceA, { recursive: true });
+      await fs.mkdir(serviceB, { recursive: true });
+      initRepoAt(serviceA);
+      initRepoAt(serviceB);
+
+      await fs.writeFile(path.join(serviceA, 'a.txt'), 'a\n');
+      await commitAll(serviceA);
+      await fs.writeFile(path.join(serviceA, 'a.txt'), 'a changed\n');
+
+      const result = await readGitDiffForWorkspace(
+        [{ name: path.basename(parent), path: parent }],
+        'working',
+      );
+      expect(result.error).to.be.undefined;
+      expect(result.files).to.have.lengthOf(1);
+      expect(result.files[0].repoLabel).to.equal('service-a');
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('stops at the first repo found on a branch, without looking for repos nested inside it', async () => {
+    // If the walk incorrectly kept recursing past a found repo, inner-repo
+    // would surface as its own independently-discovered (and diffed) repo
+    // alongside outer-repo — this asserts it does not.
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-parent-'));
+    try {
+      const outer = path.join(parent, 'outer-repo');
+      const inner = path.join(outer, 'vendored', 'inner-repo');
+      await fs.mkdir(inner, { recursive: true });
+      initRepoAt(outer);
+      initRepoAt(inner);
+
+      // `git add -A` would refuse (fatal) on an embedded repo with no commit
+      // checked out yet, so add the one file explicitly instead of `-A`.
+      await fs.writeFile(path.join(outer, 'a.txt'), 'a\n');
+      git(outer, ['add', 'a.txt']);
+      git(outer, ['commit', '-q', '-m', 'init']);
+      await fs.writeFile(path.join(outer, 'a.txt'), 'a changed\n');
+
+      const result = await readGitDiffForWorkspace(
+        [{ name: path.basename(parent), path: parent }],
+        'working',
+      );
+      expect(result.error).to.be.undefined;
+      const labels = result.files.map((f) => f.repoLabel).sort();
+      expect(labels).to.deep.equal(['outer-repo']);
+      expect(result.files.map((f) => f.relativePath)).to.deep.equal(['a.txt']);
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('RepoRootCache', () => {
+  it('memoizes repo discovery per folder — a repo added after the first call is not found until invalidated', async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-cache-'));
+    try {
+      const cache = new RepoRootCache();
+      const folder = { name: path.basename(parent), path: parent };
+
+      const before = await readGitDiffForWorkspace([folder], 'working', cache);
+      expect(before.error).to.equal('no-repos-found');
+
+      // A repo appears after the first (cached) resolution...
+      const serviceA = path.join(parent, 'service-a');
+      await fs.mkdir(serviceA, { recursive: true });
+      initRepoAt(serviceA);
+      await fs.writeFile(path.join(serviceA, 'a.txt'), 'a\n');
+      await commitAll(serviceA);
+      await fs.writeFile(path.join(serviceA, 'a.txt'), 'a changed\n');
+
+      // ...still not found while the cache is warm...
+      const stillCached = await readGitDiffForWorkspace([folder], 'working', cache);
+      expect(stillCached.error).to.equal('no-repos-found');
+
+      // ...but shows up once invalidated.
+      cache.invalidate();
+      const afterInvalidate = await readGitDiffForWorkspace([folder], 'working', cache);
+      expect(afterInvalidate.error).to.be.undefined;
+      expect(afterInvalidate.files).to.have.lengthOf(1);
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('without a cache, readGitDiffForWorkspace re-resolves from disk every call', async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-nocache-'));
+    try {
+      const folder = { name: path.basename(parent), path: parent };
+      const before = await readGitDiffForWorkspace([folder], 'working');
+      expect(before.error).to.equal('no-repos-found');
+
+      const serviceA = path.join(parent, 'service-a');
+      await fs.mkdir(serviceA, { recursive: true });
+      initRepoAt(serviceA);
+      await fs.writeFile(path.join(serviceA, 'a.txt'), 'a\n');
+      await commitAll(serviceA);
+      await fs.writeFile(path.join(serviceA, 'a.txt'), 'a changed\n');
+
+      const after = await readGitDiffForWorkspace([folder], 'working');
+      expect(after.error).to.be.undefined;
+      expect(after.files).to.have.lengthOf(1);
     } finally {
       await fs.rm(parent, { recursive: true, force: true });
     }

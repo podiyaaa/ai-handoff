@@ -35,6 +35,8 @@ export interface DiffFileChange {
   staged: boolean;
   /** Basename of the contributing repo root, used to disambiguate multi-repo workspaces. */
   repoLabel: string;
+  /** Absolute path of the contributing repo's root — used to resolve `relativePath` back to an absolute path for selection filtering. */
+  repoRoot: string;
 }
 
 export interface GitDiffOptions {
@@ -98,7 +100,7 @@ export interface HandoffOptions {
   customInstructions?: string;
   /** Paths the user explicitly checked to override filters. */
   overriddenPaths?: string[];
-  /** When set, appends a git diff section to the handoff alongside any selected files. */
+  /** When set, appends a git diff section to the handoff, filtered down to the current file selection (empty selection → empty diff). */
   gitDiff?: GitDiffOptions;
 }
 

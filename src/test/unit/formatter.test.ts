@@ -396,6 +396,7 @@ function mkDiffFile(overrides: Partial<DiffFileChange> = {}): DiffFileChange {
     isBinary: false,
     staged: false,
     repoLabel: 'my-repo',
+    repoRoot: '/repo',
     ...overrides,
   };
 }

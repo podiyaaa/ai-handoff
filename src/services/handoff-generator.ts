@@ -26,7 +26,7 @@ import type {
   SkippedFile,
 } from '../core/types';
 import { readFile } from './file-reader';
-import { readGitDiffForWorkspace } from './git-diff-reader';
+import { readGitDiffForWorkspace, RepoRootCache } from './git-diff-reader';
 
 /**
  * Read .gitignore from the workspace root (best-effort).
@@ -99,6 +99,7 @@ export async function generateHandoff(
   options: HandoffOptions,
   workspaceRoot: string,
   workspaceFolders?: { name: string; path: string }[],
+  repoRootCache?: RepoRootCache,
 ): Promise<HandoffResult> {
   const gitignoreContent = options.respectGitignore
     ? await readGitignore(workspaceRoot)
@@ -232,12 +233,43 @@ export async function generateHandoff(
     { rootLabel },
   );
 
-  const diff = options.gitDiff?.enabled
+  let diff = options.gitDiff?.enabled
     ? await readGitDiffForWorkspace(
         workspaceFolders ?? [{ name: path.basename(workspaceRoot) || 'workspace', path: workspaceRoot }],
         options.gitDiff.scope,
+        repoRootCache,
       )
     : undefined;
+  if (diff && !diff.error) {
+    // Scope the diff to the files the user actually selected — otherwise
+    // enabling git diff pulls in changes across the whole repo regardless of
+    // what's ticked in the tree. Match on resolved absolute path rather than
+    // relativePath text, since the diff's path is repo-root-relative while a
+    // selected file's relativePath is workspace-folder-relative (and may
+    // carry a multi-root folder-name prefix) — these only reliably agree
+    // once both are resolved to a real filesystem path. `repoRoot` comes
+    // from `git rev-parse --show-toplevel`, which resolves symlinks, so the
+    // selected side must be realpath'd too or the two will disagree on
+    // systems where the workspace path itself is a symlink (e.g. macOS's
+    // /tmp -> /private/tmp).
+    const selectedAbsolutePaths = new Set(
+      await Promise.all(
+        expanded.map(async (f) => {
+          try {
+            return await fs.realpath(f.absolutePath);
+          } catch {
+            return path.resolve(f.absolutePath);
+          }
+        }),
+      ),
+    );
+    diff = {
+      ...diff,
+      files: diff.files.filter((f) =>
+        selectedAbsolutePaths.has(path.resolve(f.repoRoot, f.relativePath)),
+      ),
+    };
+  }
   const diffSection = diff ? formatDiffSection(diff, options.format) : undefined;
 
   const text = formatHandoff(displayFiles, {

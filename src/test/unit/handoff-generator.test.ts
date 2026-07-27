@@ -346,7 +346,7 @@ describe('generateHandoff — git diff', () => {
     }
   });
 
-  it('produces a diff-only handoff when no files are selected', async () => {
+  it('produces no diff content when no files are selected', async () => {
     const root = await makeGitWorkspace();
     try {
       await fs.writeFile(path.join(root, 'a.ts'), 'export const a = 3;\n');
@@ -356,8 +356,30 @@ describe('generateHandoff — git diff', () => {
         root,
       );
       expect(result.included).to.have.lengthOf(0);
+      expect(result.diff?.files).to.have.lengthOf(0);
+      expect(result.text).to.not.include('<git_diff>');
+      expect(result.stats.diffFileCount).to.equal(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('scopes the diff to only the selected files, excluding other changed files', async () => {
+    const root = await makeGitWorkspace();
+    try {
+      await fs.writeFile(path.join(root, 'b.ts'), 'export const b = 1;\n');
+      git(root, ['add', '-A']);
+      git(root, ['commit', '-q', '-m', 'add b']);
+      await fs.writeFile(path.join(root, 'a.ts'), 'export const a = 5;\n');
+      await fs.writeFile(path.join(root, 'b.ts'), 'export const b = 2;\n');
+
+      const result = await generateHandoff(
+        [sel(root, 'a.ts')],
+        { ...baseOpts, gitDiff: { enabled: true, scope: 'working' } },
+        root,
+      );
       expect(result.diff?.files).to.have.lengthOf(1);
-      expect(result.text).to.include('<git_diff>');
+      expect(result.diff?.files[0].relativePath).to.equal('a.ts');
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -383,7 +405,10 @@ describe('generateHandoff — git diff', () => {
       await fs.writeFile(path.join(rootB, 'a.ts'), 'export const a = 10;\n');
 
       const result = await generateHandoff(
-        [],
+        [
+          { relativePath: `${path.basename(rootA)}/a.ts`, absolutePath: path.join(rootA, 'a.ts') },
+          { relativePath: `${path.basename(rootB)}/a.ts`, absolutePath: path.join(rootB, 'a.ts') },
+        ],
         { ...baseOpts, gitDiff: { enabled: true, scope: 'working' } },
         rootA,
         [
