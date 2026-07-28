@@ -109,18 +109,20 @@ describe('HandoffPanelProvider', () => {
     expect(HandoffPanelProvider.viewType).to.equal('aiHandoff.mainView');
   });
 
-  it('enables scripts, scopes localResourceRoots to media/webview, and references the bridge/render scripts', () => {
+  it('enables scripts, scopes localResourceRoots to media/, and references the bridge/render scripts + codicon font', () => {
     const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
     const { view } = fakeView();
     provider.resolveWebviewView(view);
 
     const options = view.webview.options as { enableScripts?: boolean; localResourceRoots?: unknown[] };
     expect(options.enableScripts).to.be.true;
+    // One root covering both media/webview/ (scripts) and media/codicons/ (font).
     expect(options.localResourceRoots).to.have.lengthOf(1);
     expect(view.webview.html).to.include('Content-Security-Policy');
     expect(view.webview.html).to.include('bridge-client.js');
     expect(view.webview.html).to.include('virtual-list.js');
     expect(view.webview.html).to.include('tree-render.js');
+    expect(view.webview.html).to.include('codicon.ttf');
     expect(view.webview.html).to.include('id="tree-scroll"');
   });
 

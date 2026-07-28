@@ -44,7 +44,7 @@
       checkbox.type = 'checkbox';
       checkbox.className = 'tree-row-checkbox';
       var icon = document.createElement('span');
-      icon.className = 'tree-row-icon';
+      icon.className = 'codicon tree-row-icon';
       var label = document.createElement('span');
       label.className = 'tree-row-label';
       row.appendChild(checkbox);
@@ -82,7 +82,9 @@
       var icon = row.childNodes[1];
       var label = row.childNodes[2];
       checkbox.checked = data.checkboxState === 'checked';
-      icon.textContent = data.isDirectory ? (row.__expanded ? '▾' : '▸') : '';
+      // codicon-chevron-down / codicon-chevron-right glyphs, matching VS
+      // Code's own tree twisties rather than plain Unicode triangles.
+      icon.textContent = data.isDirectory ? (row.__expanded ? '\uEAB4' : '\uEAB6') : '';
       label.textContent = data.name;
       label.title = data.relativePath;
     }

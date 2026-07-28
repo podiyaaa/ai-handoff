@@ -42,7 +42,11 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   resolveWebviewView(view: vscode.WebviewView): void {
     view.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.file(path.join(this.extensionUri.fsPath, 'media', 'webview'))],
+      // Covers both media/webview/ (bridge/render scripts) and
+      // media/codicons/ (the bundled codicon font, for the tree's
+      // expand/collapse chevrons — matching VS Code's own tree twisties
+      // instead of plain Unicode triangles).
+      localResourceRoots: [vscode.Uri.file(path.join(this.extensionUri.fsPath, 'media'))],
     };
     view.webview.html = this.renderHtml(view.webview);
 
@@ -81,11 +85,15 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     const nonce = generateNonce();
     const mediaUri = (file: string): vscode.Uri =>
       webview.asWebviewUri(vscode.Uri.file(path.join(this.extensionUri.fsPath, 'media', 'webview', file)));
+    const codiconFontUri = webview.asWebviewUri(
+      vscode.Uri.file(path.join(this.extensionUri.fsPath, 'media', 'codicons', 'codicon.ttf')),
+    );
 
     const csp = [
       `default-src 'none'`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `script-src 'nonce-${nonce}'`,
+      `font-src ${webview.cspSource}`,
     ].join('; ');
 
     return /* html */ `<!DOCTYPE html>
@@ -97,6 +105,18 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   <title>AI Handoff</title>
   <style>
     * { box-sizing: border-box; }
+    @font-face {
+      font-family: 'codicon';
+      src: url('${codiconFontUri}') format('truetype');
+    }
+    .codicon {
+      font-family: 'codicon';
+      font-size: 16px;
+      display: inline-block;
+      text-align: center;
+      text-rendering: auto;
+      -webkit-font-smoothing: antialiased;
+    }
     html, body {
       height: 100%;
       margin: 0;
@@ -144,13 +164,15 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       flex: 0 0 auto;
       margin: 0 4px 0 0;
       cursor: pointer;
+      /* Tints the native checkbox with the theme's accent color instead of
+         the OS's unthemed default — same fix already used for the diff
+         checkbox in action-panel.ts, for consistency across both webviews. */
+      accent-color: var(--vscode-button-background);
     }
     .tree-row-icon {
-      display: inline-block;
-      width: 14px;
+      width: 16px;
       flex: 0 0 auto;
-      opacity: 0.7;
-      text-align: center;
+      opacity: 0.8;
     }
     .tree-row-label {
       overflow: hidden;

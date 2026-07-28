@@ -18,6 +18,7 @@ setup-github.sh
 CLAUDE.md
 CONTRIBUTING.md
 NEXT-STEPS.md
+.vscode/
 
 # Test artifacts
 *.xml
