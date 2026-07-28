@@ -7,9 +7,11 @@
  * visible. Verify by hand: F5 (Extension Development Host) against a large
  * fixture, or via webview-ui/dev.html for layout/behavior iteration.
  *
- * Stage 3 scope: read-only navigation only (expand/collapse a directory by
- * clicking it). No checkboxes, no search, no actions — those come in later
- * stages, reusing this same render loop.
+ * Navigation: clicking a directory row expands/collapses it. Selection: the
+ * per-row checkbox calls tree/toggleFile or tree/toggleDirectory depending
+ * on the row's isDirectory flag, matching FileTreeModel's own split API.
+ * Search and the actions footer come in later stages, reusing this same
+ * render loop.
  */
 (function () {
   var ROW_HEIGHT = 22; // matches VS Code's own tree row height
@@ -38,12 +40,28 @@
     function makeRowElement() {
       var row = document.createElement('div');
       row.className = 'tree-row';
+      var checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'tree-row-checkbox';
       var icon = document.createElement('span');
       icon.className = 'tree-row-icon';
       var label = document.createElement('span');
       label.className = 'tree-row-label';
+      row.appendChild(checkbox);
       row.appendChild(icon);
       row.appendChild(label);
+
+      checkbox.addEventListener('click', function (e) {
+        // Don't also let this bubble into the row's own click handler below
+        // (which would toggle expand/collapse for a directory row).
+        e.stopPropagation();
+        var data = row.__data;
+        if (!data) {
+          return;
+        }
+        toggleChecked(data, checkbox.checked);
+      });
+
       row.addEventListener('click', function () {
         var data = row.__data;
         if (data && data.isDirectory) {
@@ -60,8 +78,10 @@
       row.style.height = ROW_HEIGHT + 'px';
       row.style.paddingLeft = 8 + depthOf(data.relativePath) * 16 + 'px';
       row.className = 'tree-row' + (data.isDirectory ? ' tree-row-dir' : ' tree-row-file');
-      var icon = row.childNodes[0];
-      var label = row.childNodes[1];
+      var checkbox = row.childNodes[0];
+      var icon = row.childNodes[1];
+      var label = row.childNodes[2];
+      checkbox.checked = data.checkboxState === 'checked';
       icon.textContent = data.isDirectory ? (row.__expanded ? '▾' : '▸') : '';
       label.textContent = data.name;
       label.title = data.relativePath;
@@ -130,6 +150,18 @@
       // authoritative row list still comes from refetchAndRender() below.
       scheduleRender();
       bridge.call('tree/toggleExpand', { path: relativePath, expanded: expanded }).then(refetchAndRender);
+    }
+
+    /**
+     * Ticking a file selects just that file; ticking a directory selects
+     * all its descendant files (recursively) — matches
+     * FileTreeModel.toggleFile/toggleDirectory exactly, which is why this
+     * picks the bridge method by the row's own isDirectory flag rather than
+     * having one combined "toggle" method.
+     */
+    function toggleChecked(data, checked) {
+      var method = data.isDirectory ? 'tree/toggleDirectory' : 'tree/toggleFile';
+      bridge.call(method, { path: data.relativePath, checked: checked }).then(refetchAndRender);
     }
 
     scrollEl.addEventListener('scroll', scheduleRender);

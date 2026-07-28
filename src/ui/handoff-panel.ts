@@ -73,6 +73,8 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     bridge.handle('tree/toggleExpand', ({ path, expanded }) => {
       this.model.setExpanded(path, expanded);
     });
+    bridge.handle('tree/toggleFile', ({ path, checked }) => this.model.toggleFile(path, checked));
+    bridge.handle('tree/toggleDirectory', ({ path, checked }) => this.model.toggleDirectory(path, checked));
   }
 
   private renderHtml(webview: vscode.Webview): string {
@@ -137,6 +139,11 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     }
     .tree-row:hover {
       background: var(--vscode-list-hoverBackground);
+    }
+    .tree-row-checkbox {
+      flex: 0 0 auto;
+      margin: 0 4px 0 0;
+      cursor: pointer;
     }
     .tree-row-icon {
       display: inline-block;

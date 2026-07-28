@@ -80,6 +80,18 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<vo
   }
 }
 
+/**
+ * A `tree/invalidated` event can be pushed (and land in `posted`) between
+ * two request/response pairs, since toggling selection also fires
+ * FileTreeModel's onDidChangeTree — so responses can't be found by array
+ * position, only by their correlation id.
+ */
+function findResponse(posted: unknown[], id: string): { ok: boolean; result?: unknown } | undefined {
+  return posted.find((m) => (m as { kind?: string; id?: string }).kind === 'response' && (m as { id?: string }).id === id) as
+    | { ok: boolean; result?: unknown }
+    | undefined;
+}
+
 describe('HandoffPanelProvider', () => {
   let root: string;
   let model: FileTreeModel;
@@ -138,6 +150,42 @@ describe('HandoffPanelProvider', () => {
 
     const rowsResponse = posted[1] as { result: Array<{ relativePath: string }> };
     expect(rowsResponse.result.map((r) => r.relativePath)).to.include('src/index.ts');
+  });
+
+  it('tree/toggleFile delegates to the model and is reflected in the next getChildren call', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({
+      kind: 'request',
+      id: '1',
+      method: 'tree/toggleFile',
+      params: { path: 'README.md', checked: true },
+    });
+    await waitUntil(() => posted.length >= 1);
+    expect(model.getSelection()).to.deep.equal(['README.md']);
+
+    trigger({ kind: 'request', id: '2', method: 'tree/getChildren', params: { path: undefined } });
+    await waitUntil(() => Boolean(findResponse(posted, '2')));
+    const response = findResponse(posted, '2') as { result: Array<{ name: string; checkboxState: string }> };
+    const readme = response.result.find((r) => r.name === 'README.md')!;
+    expect(readme.checkboxState).to.equal('checked');
+  });
+
+  it('tree/toggleDirectory delegates to the model and selects every descendant file', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({
+      kind: 'request',
+      id: '1',
+      method: 'tree/toggleDirectory',
+      params: { path: 'src', checked: true },
+    });
+    await waitUntil(() => posted.length >= 1);
+    expect(model.getSelection()).to.deep.equal(['src/index.ts']);
   });
 
   it('pushes a tree/invalidated event when the model changes', async () => {
