@@ -65,6 +65,13 @@
           "name": "Actions",
           "type": "webview",
           "contextualTitle": "AI Handoff"
+        },
+        {
+          "icon": "media/icon.png",
+          "id": "aiHandoff.mainView",
+          "name": "AI Handoff (preview — work in progress)",
+          "type": "webview",
+          "contextualTitle": "AI Handoff"
         }
       ]
     },

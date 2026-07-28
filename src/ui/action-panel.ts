@@ -16,6 +16,7 @@ import * as vscode from 'vscode';
 import type { DiffScope, OutputFormat } from '../core/types';
 import { formatBytes } from '../core/filter';
 import { formatTokenCount } from '../core/token-estimator';
+import { generateNonce } from './webview-nonce';
 
 /**
  * Stats passed from extension host to the webview.
@@ -579,15 +580,3 @@ export function formatStatsForPanel(stats: PanelStats): PanelStats & {
   };
 }
 
-/**
- * Random nonce for the webview's CSP. Shared with other webview providers
- * (e.g. SearchBarProvider) so there's one implementation.
- */
-export function generateNonce(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
-  for (let i = 0; i < 32; i++) {
-    result += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return result;
-}

@@ -59,6 +59,15 @@ export interface PanelState {
  */
 export interface BridgeMethods {
   'tree/getChildren': { params: { path: string | undefined }; result: TreeNodeInfoWire[] };
+  /**
+   * The flattened, ordered row list a virtualized renderer windows over —
+   * see `FileTreeModel.getVisibleRows()`. Deliberately a single call
+   * returning the whole (bounded-by-what's-expanded) list rather than a
+   * paginated/windowed API: the flattening itself must stay host-side and
+   * lazy, but once computed it's cheap to send whole, and this keeps the
+   * webview from needing to duplicate any "what rows exist" logic.
+   */
+  'tree/getVisibleRows': { params: void; result: TreeNodeInfoWire[] };
   'tree/toggleFile': { params: { path: string; checked: boolean }; result: void };
   'tree/toggleDirectory': { params: { path: string; checked: boolean }; result: void };
   'tree/toggleExpand': { params: { path: string; expanded: boolean }; result: void };

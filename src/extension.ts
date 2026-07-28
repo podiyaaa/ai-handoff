@@ -21,11 +21,13 @@ import type {
   SelectedFile,
   SelectionMemoryMode,
 } from './core/types';
+import { FileTreeModel } from './services/file-tree-model';
 import { RepoRootCache } from './services/git-diff-reader';
 import { generateHandoff } from './services/handoff-generator';
 import { SelectionStore } from './services/selection-store';
 import { ActionPanelProvider, formatStatsForPanel } from './ui/action-panel';
 import { FileTreeItem, FileTreeProvider } from './ui/file-tree-provider';
+import { HandoffPanelProvider } from './ui/handoff-panel';
 import { dispatchHandoff, pickDestinations } from './ui/output-picker';
 import { SearchBarProvider } from './ui/search-bar-panel';
 
@@ -93,10 +95,33 @@ export function activate(context: vscode.ExtensionContext): void {
     { location: vscode.ProgressLocation.Window, title: 'AI Handoff: indexing files for search…' },
     () => treeProvider.buildSearchIndex(),
   );
+  // -- New merged sidebar webview (work in progress) --
+  // Registered alongside the three legacy views above, not replacing them —
+  // this is being built up in stages behind its own view id
+  // (aiHandoff.mainView) until a final cutover stage removes the legacy
+  // views/providers. Search isn't wired up here yet (stage 5), so the
+  // initial index build is silent (no progress UI) rather than duplicating
+  // the legacy tree's "indexing files for search…" notification.
+  const fileTreeModel = new FileTreeModel(
+    vscode.workspace.workspaceFolders,
+    initialSelection,
+    getConfig('searchSkipJunkDirs', true),
+  );
+  void fileTreeModel.buildSearchIndex();
+  const handoffPanel = new HandoffPanelProvider(context.extensionUri, fileTreeModel);
+  context.subscriptions.push(
+    fileTreeModel,
+    vscode.window.registerWebviewViewProvider(HandoffPanelProvider.viewType, handoffPanel, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('aiHandoff.searchSkipJunkDirs')) {
-        void treeProvider.setSkipJunkInIndex(getConfig('searchSkipJunkDirs', true));
+        const skipJunk = getConfig('searchSkipJunkDirs', true);
+        void treeProvider.setSkipJunkInIndex(skipJunk);
+        void fileTreeModel.setSkipJunkInIndex(skipJunk);
       }
     }),
   );

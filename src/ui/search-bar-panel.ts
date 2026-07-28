@@ -16,7 +16,7 @@
  */
 
 import * as vscode from 'vscode';
-import { generateNonce } from './action-panel';
+import { generateNonce } from './webview-nonce';
 
 export type FromSearchBarMessage = { type: 'ready' } | { type: 'queryChange'; text: string };
 
