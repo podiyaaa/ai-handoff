@@ -169,6 +169,15 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
          checkbox in action-panel.ts, for consistency across both webviews. */
       accent-color: var(--vscode-button-background);
     }
+    /* Same focus-outline convention already used for other focusable
+       elements (search-bar-panel.ts's input, action-panel.ts's
+       select/textarea) — replaces the browser's default (unthemed) focus
+       ring with VS Code's own focus color, rather than removing the focus
+       indicator altogether (still needed for keyboard-navigation visibility). */
+    .tree-row-checkbox:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 1px;
+    }
     .tree-row-icon {
       width: 16px;
       flex: 0 0 auto;
