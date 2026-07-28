@@ -124,3 +124,24 @@ export interface HandoffStats {
   estimatedTokens: number;
   diffFileCount: number;
 }
+
+/**
+ * One row of the file tree, as sent to the webview. Deliberately excludes
+ * `absolutePath` — the host already resolves relativePath → absolutePath
+ * wherever it's needed (opening a file, resolving a selection for
+ * generation), so there's no legitimate reason to send a filesystem-absolute
+ * path into a webview.
+ */
+export interface TreeNodeInfo {
+  relativePath: string;
+  name: string;
+  isDirectory: boolean;
+  /**
+   * 'partial' is reserved for a future enhancement (a directory with some
+   * but not all descendants selected) — the current model only ever
+   * produces 'checked'/'unchecked', matching today's actual behavior.
+   */
+  checkboxState: 'checked' | 'unchecked' | 'partial';
+  /** Only meaningful while a search query is active. */
+  matchesSearch: boolean;
+}
