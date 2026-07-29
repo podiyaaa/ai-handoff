@@ -7,10 +7,12 @@
  * visible. Verify by hand: F5 (Extension Development Host) against a large
  * fixture, or via webview-ui/dev.html for layout/behavior iteration.
  *
- * Navigation: clicking a directory row expands/collapses it. Selection: the
- * per-row checkbox calls tree/toggleFile or tree/toggleDirectory depending
- * on the row's isDirectory flag, matching FileTreeModel's own split API.
- * The actions footer comes in a later stage, reusing this same render loop.
+ * Navigation: clicking a directory row expands/collapses it; clicking a
+ * file row opens it (file/open), matching the old native TreeView's
+ * per-item vscode.open command. Selection: the per-row checkbox calls
+ * tree/toggleFile or tree/toggleDirectory depending on the row's
+ * isDirectory flag, matching FileTreeModel's own split API. The actions
+ * footer comes in a later stage, reusing this same render loop.
  *
  * Takes an already-constructed `bridge` rather than calling
  * acquireVsCodeApi()/createBridge() itself — acquireVsCodeApi() throws if
@@ -66,8 +68,13 @@
 
       row.addEventListener('click', function () {
         var data = row.__data;
-        if (data && data.isDirectory) {
+        if (!data) {
+          return;
+        }
+        if (data.isDirectory) {
           toggleExpand(data.relativePath, !row.__expanded);
+        } else {
+          bridge.call('file/open', { path: data.relativePath });
         }
       });
       return row;

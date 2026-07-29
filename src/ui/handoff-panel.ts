@@ -91,6 +91,16 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       }
       return { error };
     });
+    bridge.handle('file/open', async ({ path: relativePath }) => {
+      const absolutePath = this.model.resolveAbsolutePath(relativePath);
+      if (!absolutePath) {
+        return;
+      }
+      // Same command the old FileTreeItem's click behavior used
+      // (vscode.open via a TreeItem.command), just invoked directly since
+      // there's no TreeItem here to attach it to.
+      await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(absolutePath));
+    });
   }
 
   private renderHtml(webview: vscode.Webview): string {

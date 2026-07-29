@@ -51,6 +51,13 @@ class RelativePattern {
 // Bitmask values match vscode.FileType so `type & FileType.X` checks work.
 const FileType = { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 };
 
+// Shared across every `require('vscode')` call (each of which otherwise
+// gets its own fresh stub object) so a test can assert on what a completely
+// separate module (e.g. src/ui/handoff-panel.ts) passed to
+// vscode.commands.executeCommand, by reading this array directly.
+const executedCommands = [];
+global.__testExecutedCommands = executedCommands;
+
 Module._load = function (request, parent, isMain) {
   if (request === 'vscode') {
     return {
@@ -80,7 +87,12 @@ Module._load = function (request, parent, isMain) {
         }),
       },
       env: {},
-      commands: {},
+      commands: {
+        executeCommand: (command, ...args) => {
+          executedCommands.push({ command, args });
+          return Promise.resolve();
+        },
+      },
       Uri: {
         file: (fsPath) => ({ fsPath, toString: () => `file://${fsPath}` }),
       },

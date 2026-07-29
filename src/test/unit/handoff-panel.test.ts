@@ -221,6 +221,52 @@ describe('HandoffPanelProvider', () => {
     expect(model.getSelection()).to.deep.equal(['src/index.ts']);
   });
 
+  it('file/open resolves the relative path and opens it via vscode.open', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    const executed = (global as unknown as { __testExecutedCommands: Array<{ command: string; args: unknown[] }> })
+      .__testExecutedCommands;
+    const before = executed.length;
+
+    trigger({ kind: 'request', id: '1', method: 'file/open', params: { path: 'README.md' } });
+    await waitUntil(() => posted.length >= 1);
+
+    expect(executed.length).to.equal(before + 1);
+    const call = executed[executed.length - 1];
+    expect(call.command).to.equal('vscode.open');
+    expect((call.args[0] as { fsPath: string }).fsPath).to.equal(path.join(root, 'README.md'));
+  });
+
+  it('file/open is a no-op for a path that cannot be resolved (no workspace folder owns it)', async () => {
+    // resolveAbsolutePath only fails to resolve on an unrecognized folder-name
+    // prefix in multi-root mode — a single-root model resolves any relative
+    // path against its one folder unconditionally, so this needs its own
+    // multi-root model to exercise the failure path at all.
+    const rootB = await makeRoot('aih-handoff-panel-b-');
+    const multiRootModel = new FileTreeModel([fakeFolder(root, 0), fakeFolder(rootB, 1)]);
+    try {
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, multiRootModel);
+      const { view, posted, trigger } = fakeView();
+      provider.resolveWebviewView(view);
+
+      const executed = (
+        global as unknown as { __testExecutedCommands: Array<{ command: string; args: unknown[] }> }
+      ).__testExecutedCommands;
+      const before = executed.length;
+
+      trigger({ kind: 'request', id: '1', method: 'file/open', params: { path: 'not-a-real-folder/x.ts' } });
+      await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+      expect(executed.length).to.equal(before);
+      expect((findResponse(posted, '1') as { ok: boolean }).ok).to.be.true;
+    } finally {
+      multiRootModel.dispose();
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
+
   it('pushes a tree/invalidated event when the model changes', async () => {
     const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
     const { view, posted } = fakeView();
