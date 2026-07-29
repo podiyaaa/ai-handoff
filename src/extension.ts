@@ -99,12 +99,18 @@ export function activate(context: vscode.ExtensionContext): void {
   // Registered alongside the three legacy views above, not replacing them —
   // this is being built up in stages behind its own view id
   // (aiHandoff.mainView) until a final cutover stage removes the legacy
-  // views/providers. Search isn't wired up here yet (stage 5), so the
-  // initial index build is silent (no progress UI) rather than duplicating
-  // the legacy tree's "indexing files for search…" notification.
+  // views/providers. The initial index build is silent (no progress UI)
+  // rather than duplicating the legacy tree's "indexing files…" notification.
+  //
+  // Deliberately starts with an empty selection, NOT `initialSelection` —
+  // selection persistence for this new provider hasn't been designed yet
+  // (that's a stage 6/8 decision, once it's wired to session/Actions state
+  // for real); until then it should never silently inherit whatever the
+  // legacy Files view happened to have persisted, which read as "stale
+  // selection surviving every reload" during manual testing.
   const fileTreeModel = new FileTreeModel(
     vscode.workspace.workspaceFolders,
-    initialSelection,
+    [],
     getConfig('searchSkipJunkDirs', true),
   );
   void fileTreeModel.buildSearchIndex();
