@@ -363,6 +363,24 @@ export function activate(context: vscode.ExtensionContext): void {
       const root = workspaceRoot ?? files[0].absolutePath;
       await doGenerateAndDispatch(files, actionPanel, session, root);
     }),
+    vscode.commands.registerCommand('aiHandoff.generateFromEditor', async (
+      ...args: unknown[]
+    ) => {
+      // editor/context and editor/title/context both pass the resource URI
+      // as an argument, same as explorer/context — but fall back to the
+      // active editor's document just in case a host ever invokes this
+      // without one (e.g. run via the command palette). collectExplorerFiles
+      // dedupes by absolutePath, so appending the fallback is harmless even
+      // when the menu-supplied arg is already present.
+      const fallback = vscode.window.activeTextEditor?.document.uri;
+      const files = collectExplorerFiles(fallback ? [...args, fallback] : args);
+      if (files.length === 0) {
+        vscode.window.showWarningMessage('AI Handoff: no file to generate from.');
+        return;
+      }
+      const root = workspaceRoot ?? files[0].absolutePath;
+      await doGenerateAndDispatch(files, actionPanel, session, root);
+    }),
     vscode.commands.registerCommand('aiHandoff.generateFromPanel', async () => {
       await runGenerate(treeProvider, actionPanel, session, workspaceRoot);
     }),

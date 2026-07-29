@@ -81,6 +81,10 @@
         "title": "AI Handoff: Generate from selection"
       },
       {
+        "command": "aiHandoff.generateFromEditor",
+        "title": "AI Handoff: Generate handoff from this file"
+      },
+      {
         "command": "aiHandoff.generateFromPanel",
         "title": "AI Handoff: Generate handoff",
         "icon": "$(rocket)"
@@ -112,6 +116,18 @@
       "explorer/context": [
         {
           "command": "aiHandoff.generateFromExplorer",
+          "group": "7_modification@99"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "aiHandoff.generateFromEditor",
+          "group": "7_modification@99"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "aiHandoff.generateFromEditor",
           "group": "7_modification@99"
         }
       ],
