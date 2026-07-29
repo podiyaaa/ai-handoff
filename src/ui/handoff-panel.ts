@@ -600,6 +600,13 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     .tree-row:hover {
       background: var(--vscode-list-hoverBackground);
     }
+    /* Roving tabindex: exactly one row is ever tabindex="0" at a time (see
+       tree-render.js's applyRovingTabindex), so this only ever shows on
+       whichever row keyboard focus actually landed on. */
+    .tree-row:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
     .tree-row-checkbox {
       flex: 0 0 auto;
       margin: 0 4px 0 0;
@@ -808,7 +815,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       <div class="error hidden" id="error"></div>
     </div>
     <div id="tree-scroll">
-      <div id="tree-spacer"></div>
+      <div id="tree-spacer" role="tree" aria-label="File tree" aria-multiselectable="true"></div>
     </div>
 
     <div class="actions-footer">

@@ -39,21 +39,78 @@
     /** Mirrors expand state locally just so the disclosure icon can flip instantly on click. */
     var expandedCache = Object.create(null);
     var rafHandle = null;
+    /**
+     * Roving tabindex: the relativePath of the row that's tabindex="0" (all
+     * others are "-1"), persisted by path (not DOM element or index) since
+     * virtualization recycles/removes row elements as they scroll out —
+     * unlike a native tree, a stale DOM reference or index wouldn't survive
+     * a scroll or a fresh getVisibleRows() result. Kept in sync by
+     * applyRovingTabindex(), called after every render() and on click.
+     */
+    var focusedPath = null;
+    var rowIdCounter = 0;
 
     function depthOf(relativePath) {
       return relativePath.split('/').length - 1;
     }
 
+    function findRowIndexByPath(relativePath) {
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].relativePath === relativePath) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    /**
+     * Exactly one rendered row gets tabindex="0" (and aria-selected="true",
+     * repurposed here to mean "the currently active tree row" rather than
+     * checkbox state — the checkbox already exposes inclusion state on its
+     * own). If focusedPath's row isn't currently rendered (e.g. the user
+     * scrolled it out of view with the mouse wheel, without moving focus),
+     * fall back to the first rendered row so the tree stays Tab-reachable.
+     */
+    function applyRovingTabindex() {
+      var found = false;
+      var first = null;
+      rendered.forEach(function (entry) {
+        if (!first || entry.index < first.index) {
+          first = entry;
+        }
+        var isFocused = entry.data.relativePath === focusedPath;
+        entry.el.tabIndex = isFocused ? 0 : -1;
+        entry.el.setAttribute('aria-selected', String(isFocused));
+        if (isFocused) {
+          found = true;
+        }
+      });
+      if (!found && first) {
+        first.el.tabIndex = 0;
+        first.el.setAttribute('aria-selected', 'true');
+      }
+    }
+
     function makeRowElement() {
       var row = document.createElement('div');
       row.className = 'tree-row';
+      row.setAttribute('role', 'treeitem');
+      row.tabIndex = -1;
       var checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.className = 'tree-row-checkbox';
+      // Removed from the normal Tab sequence — the row itself is the one
+      // tab stop per item (roving tabindex); Space, handled below on the
+      // row, toggles this checkbox instead of relying on the browser's
+      // default checkbox-focused Space behavior.
+      checkbox.tabIndex = -1;
       var icon = document.createElement('span');
       icon.className = 'codicon tree-row-icon';
+      icon.setAttribute('aria-hidden', 'true'); // decorative — the row's accessible name comes from the label
       var label = document.createElement('span');
       label.className = 'tree-row-label';
+      label.id = 'tree-row-label-' + rowIdCounter++;
+      checkbox.setAttribute('aria-labelledby', label.id);
       row.appendChild(checkbox);
       row.appendChild(icon);
       row.appendChild(label);
@@ -66,6 +123,8 @@
         if (!data) {
           return;
         }
+        focusedPath = data.relativePath;
+        applyRovingTabindex();
         toggleChecked(data, checkbox.checked);
       });
 
@@ -74,6 +133,8 @@
         if (!data) {
           return;
         }
+        focusedPath = data.relativePath;
+        applyRovingTabindex();
         if (data.isDirectory) {
           toggleExpand(data.relativePath, !row.__expanded);
         } else {
@@ -90,6 +151,12 @@
       row.style.height = ROW_HEIGHT + 'px';
       row.style.paddingLeft = 8 + depthOf(data.relativePath) * 16 + 'px';
       row.className = 'tree-row' + (data.isDirectory ? ' tree-row-dir' : ' tree-row-file');
+      row.setAttribute('aria-level', String(depthOf(data.relativePath) + 1));
+      if (data.isDirectory) {
+        row.setAttribute('aria-expanded', String(row.__expanded));
+      } else {
+        row.removeAttribute('aria-expanded');
+      }
       var checkbox = row.childNodes[0];
       var icon = row.childNodes[1];
       var label = row.childNodes[2];
@@ -142,6 +209,8 @@
         }
         rendered.set(data.relativePath, { el: rowEl, index: i, data: data });
       }
+
+      applyRovingTabindex();
     }
 
     function scheduleRender() {
@@ -178,8 +247,104 @@
       bridge.call(method, { path: data.relativePath, checked: checked }).then(refetchAndRender);
     }
 
+    /**
+     * Move focus to row `index`, scrolling it into view first — a row
+     * outside the current virtualized window isn't in the DOM at all yet,
+     * the classic virtualization-plus-focus bug (see virtual-list.js's
+     * scrollOffsetForIndex doc). render() is called synchronously (not via
+     * scheduleRender()'s rAF deferral) so the target row exists before
+     * .focus() is called on it.
+     */
+    function focusRowAtIndex(index) {
+      if (index < 0 || index >= rows.length) {
+        return;
+      }
+      var data = rows[index];
+      focusedPath = data.relativePath;
+      var newScrollTop = VirtualList.scrollOffsetForIndex({
+        index: index,
+        rowHeight: ROW_HEIGHT,
+        viewportHeight: scrollEl.clientHeight,
+        currentScrollTop: scrollEl.scrollTop,
+      });
+      if (newScrollTop !== scrollEl.scrollTop) {
+        scrollEl.scrollTop = newScrollTop;
+      }
+      render();
+      var entry = rendered.get(data.relativePath);
+      if (entry) {
+        entry.el.focus();
+      }
+    }
+
+    /**
+     * Delegated keydown on the tree container rather than per-row, since
+     * rows are recycled/removed as the user scrolls — a per-row listener
+     * would need constant re-attachment. Scoped to `e.target === row` (not
+     * just "inside" it) so a directly-mouse-focused checkbox keeps its own
+     * native Space/Enter behavior instead of also triggering the row's
+     * shortcuts (which would double-toggle the checkbox on Space).
+     */
+    function onTreeKeyDown(e) {
+      var row = e.target.closest ? e.target.closest('.tree-row') : null;
+      if (!row || !row.__data || e.target !== row) {
+        return;
+      }
+      var data = row.__data;
+      var index = findRowIndexByPath(data.relativePath);
+
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          focusRowAtIndex(index + 1);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          focusRowAtIndex(index - 1);
+          break;
+        case 'Home':
+          e.preventDefault();
+          focusRowAtIndex(0);
+          break;
+        case 'End':
+          e.preventDefault();
+          focusRowAtIndex(rows.length - 1);
+          break;
+        case 'ArrowRight':
+          if (data.isDirectory && !row.__expanded) {
+            e.preventDefault();
+            toggleExpand(data.relativePath, true);
+          }
+          break;
+        case 'ArrowLeft':
+          if (data.isDirectory && row.__expanded) {
+            e.preventDefault();
+            toggleExpand(data.relativePath, false);
+          }
+          break;
+        case 'Enter':
+          e.preventDefault();
+          if (data.isDirectory) {
+            toggleExpand(data.relativePath, !row.__expanded);
+          } else {
+            bridge.call('file/open', { path: data.relativePath });
+          }
+          break;
+        case ' ':
+        case 'Spacebar':
+          e.preventDefault();
+          var checkbox = row.childNodes[0];
+          checkbox.checked = !checkbox.checked;
+          toggleChecked(data, checkbox.checked);
+          break;
+      }
+    }
+
     scrollEl.addEventListener('scroll', scheduleRender);
     window.addEventListener('resize', scheduleRender);
+    // Delegated on the spacer (rows' shared parent) rather than per-row,
+    // since virtualization recycles/removes row elements as the user scrolls.
+    spacerEl.addEventListener('keydown', onTreeKeyDown);
     // Pushed by the host when the file watcher invalidates something, or a
     // search query changes what should be visible.
     bridge.on('tree/invalidated', refetchAndRender);

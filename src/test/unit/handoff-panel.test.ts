@@ -134,6 +134,7 @@ describe('HandoffPanelProvider', () => {
     expect(view.webview.html).to.include('id="clear-selection"');
     expect(view.webview.html).to.include('id="show-selected-only"');
     expect(view.webview.html).to.include('id="collapse-all"');
+    expect(view.webview.html).to.include('role="tree"');
   });
 
   it('tree/setSearchQuery parses the query and applies it to the model', async () => {
