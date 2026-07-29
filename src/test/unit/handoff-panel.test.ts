@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { WebviewView, WorkspaceFolder } from 'vscode';
 import { FileTreeModel } from '../../services/file-tree-model';
+import { InMemoryMemento, SelectionStore } from '../../services/selection-store';
 import { HandoffPanelProvider } from '../../ui/handoff-panel';
 
 function fakeFolder(root: string, index: number): WorkspaceFolder {
@@ -95,10 +96,12 @@ function findResponse(posted: unknown[], id: string): { ok: boolean; result?: un
 describe('HandoffPanelProvider', () => {
   let root: string;
   let model: FileTreeModel;
+  let store: SelectionStore;
 
   beforeEach(async () => {
     root = await makeRoot('aih-handoff-panel-');
     model = new FileTreeModel([fakeFolder(root, 0)]);
+    store = new SelectionStore(new InMemoryMemento());
   });
   afterEach(async () => {
     model.dispose();
@@ -110,7 +113,7 @@ describe('HandoffPanelProvider', () => {
   });
 
   it('enables scripts, scopes localResourceRoots to media/, and references the bridge/render scripts + codicon font', () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view } = fakeView();
     provider.resolveWebviewView(view);
 
@@ -130,7 +133,7 @@ describe('HandoffPanelProvider', () => {
   });
 
   it('tree/setSearchQuery parses the query and applies it to the model', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted, trigger } = fakeView();
     provider.resolveWebviewView(view);
 
@@ -145,7 +148,7 @@ describe('HandoffPanelProvider', () => {
   });
 
   it('tree/setSearchQuery surfaces a parse error without changing the model\'s query', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted, trigger } = fakeView();
     provider.resolveWebviewView(view);
 
@@ -158,7 +161,7 @@ describe('HandoffPanelProvider', () => {
   });
 
   it('tree/getChildren delegates to the model', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted, trigger } = fakeView();
     provider.resolveWebviewView(view);
 
@@ -172,7 +175,7 @@ describe('HandoffPanelProvider', () => {
   });
 
   it('tree/toggleExpand + tree/getVisibleRows round-trip reflects expand state', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted, trigger } = fakeView();
     provider.resolveWebviewView(view);
 
@@ -186,7 +189,7 @@ describe('HandoffPanelProvider', () => {
   });
 
   it('tree/toggleFile delegates to the model and is reflected in the next getChildren call', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted, trigger } = fakeView();
     provider.resolveWebviewView(view);
 
@@ -207,7 +210,7 @@ describe('HandoffPanelProvider', () => {
   });
 
   it('tree/toggleDirectory delegates to the model and selects every descendant file', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted, trigger } = fakeView();
     provider.resolveWebviewView(view);
 
@@ -222,7 +225,7 @@ describe('HandoffPanelProvider', () => {
   });
 
   it('file/open resolves the relative path and opens it via vscode.open', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted, trigger } = fakeView();
     provider.resolveWebviewView(view);
 
@@ -247,7 +250,7 @@ describe('HandoffPanelProvider', () => {
     const rootB = await makeRoot('aih-handoff-panel-b-');
     const multiRootModel = new FileTreeModel([fakeFolder(root, 0), fakeFolder(rootB, 1)]);
     try {
-      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, multiRootModel);
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, multiRootModel, store, root);
       const { view, posted, trigger } = fakeView();
       provider.resolveWebviewView(view);
 
@@ -267,8 +270,191 @@ describe('HandoffPanelProvider', () => {
     }
   });
 
+  it('actions/ready returns the full current state and bookmarks directly (not via the push events)', async () => {
+    await model.toggleFile('README.md', true);
+    await store.saveNamedSet('Existing', ['README.md']);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/ready', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    const response = findResponse(posted, '1') as {
+      result: { state: { stats: { fileCount: number }; format: string }; bookmarks: Array<{ name: string }> };
+    };
+    expect(response.result.state.stats.fileCount).to.equal(1);
+    expect(response.result.state.format).to.equal('xml');
+    expect(response.result.bookmarks.map((b) => b.name)).to.deep.equal(['Existing']);
+  });
+
+  it('actions/setFormat updates the format and is reflected in the next actions/ready call', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/setFormat', params: { format: 'markdown' } });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    trigger({ kind: 'request', id: '2', method: 'actions/ready', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '2')));
+    const response = findResponse(posted, '2') as { result: { state: { format: string } } };
+    expect(response.result.state.format).to.equal('markdown');
+  });
+
+  it('actions/setDiffEnabled and actions/setDiffScope update state together', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/setDiffEnabled', params: { enabled: true } });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+    trigger({ kind: 'request', id: '2', method: 'actions/setDiffScope', params: { scope: 'staged' } });
+    await waitUntil(() => Boolean(findResponse(posted, '2')));
+
+    trigger({ kind: 'request', id: '3', method: 'actions/ready', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '3')));
+    const response = findResponse(posted, '3') as { result: { state: { gitDiffEnabled: boolean; diffScope: string } } };
+    expect(response.result.state.gitDiffEnabled).to.be.true;
+    expect(response.result.state.diffScope).to.equal('staged');
+  });
+
+  it('actions/overrideFile adds the path to both overriddenPaths and the current selection', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/overrideFile', params: { path: 'README.md' } });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    expect(model.getSelection()).to.deep.equal(['README.md']);
+  });
+
+  describe('actions/generate — error paths only', () => {
+    // The successful generate+dispatch+clipboard round trip is intentionally
+    // not exercised here — it would need the pickDestinations()/
+    // dispatchHandoff() QuickPick-item shape and vscode.env.clipboard wired
+    // into the shared stub for a fairly marginal return, given
+    // generateHandoff() and output-picker.ts's pure logic already have their
+    // own direct test coverage elsewhere. These two error paths don't need
+    // any of that machinery.
+
+    it('emits an error and does not throw when no workspace folder is open', async () => {
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, undefined);
+      const { view, posted, trigger } = fakeView();
+      provider.resolveWebviewView(view);
+
+      trigger({ kind: 'request', id: '1', method: 'actions/generate', params: undefined });
+      await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+      const errorEvent = posted.find(
+        (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'error',
+      ) as { payload: { message: string } } | undefined;
+      expect(errorEvent?.payload.message).to.equal('No workspace folder is open.');
+    });
+
+    it('emits an error when nothing is selected', async () => {
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+      const { view, posted, trigger } = fakeView();
+      provider.resolveWebviewView(view);
+
+      trigger({ kind: 'request', id: '1', method: 'actions/generate', params: undefined });
+      await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+      const errorEvent = posted.find(
+        (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'error',
+      ) as { payload: { message: string } } | undefined;
+      expect(errorEvent?.payload.message).to.equal('Select at least one file before generating.');
+    });
+  });
+
+  describe('bookmarks', () => {
+    afterEach(() => {
+      const responses = (global as unknown as { __testWindowResponses: Record<string, unknown> })
+        .__testWindowResponses;
+      responses.showInputBox = undefined;
+      responses.showWarningMessage = undefined;
+      const messages = (global as unknown as { __testWindowMessages: { warning: unknown[]; information: unknown[] } })
+        .__testWindowMessages;
+      messages.warning.length = 0;
+      messages.information.length = 0;
+    });
+
+    it('bookmarks/save prompts for a name and saves the current selection', async () => {
+      (global as unknown as { __testWindowResponses: { showInputBox: string } }).__testWindowResponses.showInputBox =
+        'Auth module';
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+      const { view, posted, trigger } = fakeView();
+      provider.resolveWebviewView(view);
+      await model.toggleFile('README.md', true);
+
+      trigger({ kind: 'request', id: '1', method: 'bookmarks/save', params: undefined });
+      await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+      expect(store.getNamedSet('Auth module')).to.deep.equal(['README.md']);
+      const bookmarksEvent = posted.find(
+        (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'bookmarks',
+      ) as { payload: Array<{ name: string }> } | undefined;
+      expect(bookmarksEvent?.payload.map((b) => b.name)).to.deep.equal(['Auth module']);
+    });
+
+    it('bookmarks/save warns and does not save when nothing is selected', async () => {
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+      const { view, posted, trigger } = fakeView();
+      provider.resolveWebviewView(view);
+
+      trigger({ kind: 'request', id: '1', method: 'bookmarks/save', params: undefined });
+      await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+      const messages = (global as unknown as { __testWindowMessages: { warning: string[] } }).__testWindowMessages;
+      expect(messages.warning).to.have.lengthOf(1);
+      expect(store.listSetNames()).to.deep.equal([]);
+    });
+
+    it('bookmarks/load replaces the current selection with the bookmark', async () => {
+      await store.saveNamedSet('Existing', ['src/index.ts']);
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+      const { view, posted, trigger } = fakeView();
+      provider.resolveWebviewView(view);
+
+      trigger({ kind: 'request', id: '1', method: 'bookmarks/load', params: { name: 'Existing' } });
+      await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+      expect(model.getSelection()).to.deep.equal(['src/index.ts']);
+    });
+
+    it('bookmarks/delete removes the named set and pushes the updated list', async () => {
+      await store.saveNamedSet('ToDelete', ['README.md']);
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+      const { view, posted, trigger } = fakeView();
+      provider.resolveWebviewView(view);
+
+      trigger({ kind: 'request', id: '1', method: 'bookmarks/delete', params: { name: 'ToDelete' } });
+      await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+      expect(store.listSetNames()).to.deep.equal([]);
+      const bookmarksEvent = posted.find(
+        (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'bookmarks',
+      ) as { payload: unknown[] } | undefined;
+      expect(bookmarksEvent?.payload).to.deep.equal([]);
+    });
+
+    it('bookmarks/overrideWithCurrent replaces the bookmark contents with the current selection', async () => {
+      await store.saveNamedSet('ToOverride', ['README.md']);
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+      const { view, posted, trigger } = fakeView();
+      provider.resolveWebviewView(view);
+      await model.toggleFile('src/index.ts', true);
+
+      trigger({ kind: 'request', id: '1', method: 'bookmarks/overrideWithCurrent', params: { name: 'ToOverride' } });
+      await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+      expect(store.getNamedSet('ToOverride')).to.deep.equal(['src/index.ts']);
+    });
+  });
+
   it('pushes a tree/invalidated event when the model changes', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted } = fakeView();
     provider.resolveWebviewView(view);
 

@@ -114,7 +114,7 @@ export function activate(context: vscode.ExtensionContext): void {
     getConfig('searchSkipJunkDirs', true),
   );
   void fileTreeModel.buildSearchIndex();
-  const handoffPanel = new HandoffPanelProvider(context.extensionUri, fileTreeModel);
+  const handoffPanel = new HandoffPanelProvider(context.extensionUri, fileTreeModel, store, workspaceRoot);
   context.subscriptions.push(
     fileTreeModel,
     vscode.window.registerWebviewViewProvider(HandoffPanelProvider.viewType, handoffPanel, {

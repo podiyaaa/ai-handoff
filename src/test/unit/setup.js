@@ -58,10 +58,35 @@ const FileType = { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 };
 const executedCommands = [];
 global.__testExecutedCommands = executedCommands;
 
+// Same idea for vscode.window.show*Message calls — recorded here so a test
+// can assert a message was shown without needing its own vscode import.
+const windowMessages = { information: [], warning: [], error: [] };
+global.__testWindowMessages = windowMessages;
+
+// Canned responses for interactive window prompts (showInputBox etc.) —
+// set these from a test *before* triggering the action that shows the
+// prompt; defaults simulate the user cancelling (undefined/empty array).
+const windowResponses = { showInputBox: undefined, showWarningMessage: undefined, showQuickPick: undefined };
+global.__testWindowResponses = windowResponses;
+
 Module._load = function (request, parent, isMain) {
   if (request === 'vscode') {
     return {
-      window: {},
+      window: {
+        showInputBox: async () => windowResponses.showInputBox,
+        showWarningMessage: async (message) => {
+          windowMessages.warning.push(message);
+          return windowResponses.showWarningMessage;
+        },
+        showInformationMessage: (message) => {
+          windowMessages.information.push(message);
+        },
+        showErrorMessage: (message) => {
+          windowMessages.error.push(message);
+        },
+        showQuickPick: async () => windowResponses.showQuickPick,
+        withProgress: async (_options, task) => task(),
+      },
       workspace: {
         workspaceFolders: undefined,
         fs: {
@@ -84,6 +109,12 @@ Module._load = function (request, parent, isMain) {
           onDidDelete: () => ({ dispose: () => {} }),
           onDidChange: () => ({ dispose: () => {} }),
           dispose: () => {},
+        }),
+        // No test exercises actual configured values (they'd need a real
+        // VS Code host) — always returning the caller's own default is
+        // enough for code that just needs getConfiguration().get() to not throw.
+        getConfiguration: () => ({
+          get: (_key, defaultValue) => defaultValue,
         }),
       },
       env: {},

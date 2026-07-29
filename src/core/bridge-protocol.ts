@@ -41,9 +41,20 @@ export interface PanelBookmark {
   fileCount: number;
 }
 
+/**
+ * Stats pre-formatted host-side (see `formatStatsForPanel` in
+ * `ui/action-panel.ts`, reused unchanged) — the webview displays
+ * `sizeFormatted`/`tokensFormatted` directly rather than duplicating
+ * `formatBytes`/`formatTokenCount` logic client-side.
+ */
+export interface PanelStats extends HandoffStats {
+  sizeFormatted: string;
+  tokensFormatted: string;
+}
+
 /** Everything the Actions footer needs to render itself, pushed as one `state` event. */
 export interface PanelState {
-  stats: HandoffStats;
+  stats: PanelStats;
   format: OutputFormat;
   showCustomInstructions: boolean;
   instructions: string;
@@ -72,6 +83,15 @@ export interface BridgeMethods {
   'tree/toggleDirectory': { params: { path: string; checked: boolean }; result: void };
   'tree/toggleExpand': { params: { path: string; expanded: boolean }; result: void };
   'tree/setSearchQuery': { params: { text: string }; result: { error: string | undefined } };
+  /**
+   * Called once by the webview on load. Returns the full current state
+   * directly as the RPC result (rather than relying on the `state`/
+   * `bookmarks` push events for the *first* delivery) — a push emitted
+   * before the webview has registered its listener would be silently lost,
+   * the same problem the old ActionPanelProvider's cached `currentState` +
+   * webview-sent `ready` message solved.
+   */
+  'actions/ready': { params: void; result: { state: PanelState; bookmarks: PanelBookmark[] } };
   'actions/setFormat': { params: { format: OutputFormat }; result: void };
   'actions/setInstructions': { params: { text: string }; result: void };
   'actions/setDiffEnabled': { params: { enabled: boolean }; result: void };
@@ -101,8 +121,9 @@ export interface BridgeEvents {
   bookmarks: PanelBookmark[];
   /** `path: undefined` means "the root changed" (e.g. treat as fully invalidated). */
   'tree/invalidated': { path: string | undefined };
-  'tree/generating': { busy: boolean };
-  'tree/error': { message: string };
+  'actions/generating': { busy: boolean };
+  /** General-purpose error display for the Actions footer — not tree-specific. */
+  error: { message: string };
 }
 
 export type BridgeMethodName = keyof BridgeMethods;

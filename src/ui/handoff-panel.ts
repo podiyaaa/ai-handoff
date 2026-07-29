@@ -8,25 +8,44 @@
  * bar's single input row didn't need).
  *
  * Built up in stages (see the project's webview-merge plan) — virtualized
- * tree render, checkbox selection, and search are wired up so far, against
- * real `FileTreeModel` data. The actions footer content still doesn't exist
- * yet (empty placeholder) — that's the next stage, reusing this same shell.
- * Registered *alongside* the three old views (not replacing them) until the
- * final cutover stage.
+ * tree render, checkbox selection, search, file-open, and now the actions
+ * footer (format/instructions/diff/generate/bookmarks/skipped) are all
+ * wired up, against real `FileTreeModel` data. Registered *alongside* the
+ * three old views (not replacing them) until the final cutover stage.
+ *
+ * This provider deliberately owns its own session-like state (format,
+ * instructions, diff settings, overridden paths, a RepoRootCache) rather
+ * than sharing `extension.ts`'s `SessionState`/legacy `ActionPanelProvider` —
+ * the two systems' shapes (FileTreeProvider vs FileTreeModel,
+ * ActionPanelProvider vs a bridge) differ enough that unifying them now
+ * would just get unwound again at the stage 8 cutover, when the legacy
+ * system is deleted and only this one remains. `SelectionStore` (bookmarks/
+ * last-selection) IS shared — it's a stateless wrapper around
+ * `context.workspaceState`, so passing in the same instance costs nothing
+ * and keeps bookmarks consistent between old and new during the migration.
  *
  * Framework-free, no build step — same convention as `action-panel.ts`/
  * `search-bar-panel.ts`, just with the webview's JS split into external
  * files under `media/webview/` (loaded via `asWebviewUri()`) instead of one
  * inline template literal, since this view's client-side code (bridge
- * client, virtualization math, tree/search rendering) is large enough that
- * a single inline string would hurt review/maintenance more than a few
- * extra files does.
+ * client, virtualization math, tree/search/actions rendering) is large
+ * enough that a single inline string would hurt review/maintenance more
+ * than a few extra files does.
  */
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import type { PanelBookmark, PanelState } from '../core/bridge-protocol';
+import { formatBytes } from '../core/filter';
 import { parseSearchQuery } from '../core/search-filter';
+import { formatTokenCount } from '../core/token-estimator';
+import type { DiffScope, HandoffOptions, OutputFormat, SelectedFile } from '../core/types';
 import type { FileTreeModel } from '../services/file-tree-model';
+import { RepoRootCache } from '../services/git-diff-reader';
+import { generateHandoff } from '../services/handoff-generator';
+import type { SelectionStore } from '../services/selection-store';
+import { formatStatsForPanel } from './action-panel';
+import { dispatchHandoff, pickDestinations } from './output-picker';
 import { HostBridge } from './webview-host-bridge';
 import { generateNonce } from './webview-nonce';
 
@@ -35,10 +54,26 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
 
   private bridge: HostBridge | undefined;
 
+  // -- Session-like state — see the class doc for why this isn't shared
+  // with extension.ts's SessionState.
+  private currentFormat: OutputFormat;
+  private currentInstructions = '';
+  private readonly overriddenPaths = new Set<string>();
+  private lastSkipped: Array<{ relativePath: string; reason: string; detail?: string }> = [];
+  private gitDiffEnabled: boolean;
+  private diffScope: DiffScope;
+  private readonly repoRootCache = new RepoRootCache();
+
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly model: FileTreeModel,
-  ) {}
+    private readonly store: SelectionStore,
+    private readonly workspaceRoot: string | undefined,
+  ) {
+    this.currentFormat = this.getConfig<OutputFormat>('outputFormat', 'xml');
+    this.gitDiffEnabled = this.getConfig('gitDiffEnabledByDefault', false);
+    this.diffScope = this.getConfig<DiffScope>('gitDiffScope', 'working');
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     view.webview.options = {
@@ -62,9 +97,28 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     const changeListener = this.model.onDidChangeTree(() => {
       bridge.emit('tree/invalidated', { path: undefined });
     });
+    // Refresh stats whenever selection changes — mirrors the old
+    // treeProvider.onDidChangeSelection -> refreshPanel wiring, minus the
+    // store.setLastSelection() persistence (deliberately not done yet, see
+    // extension.ts's "starts empty on every launch" decision).
+    const selectionListener = this.model.onDidChangeSelection(() => {
+      void this.pushState();
+    });
+    // Ticking one specific file's checkbox is a deliberate "include this
+    // exact file" action, so auto-register it as a filter override — same
+    // reasoning as the legacy treeProvider.onDidToggleIndividualFile wiring.
+    const overrideListener = this.model.onDidToggleIndividualFile(({ relativePath, checked }) => {
+      if (checked) {
+        this.overriddenPaths.add(relativePath);
+      } else {
+        this.overriddenPaths.delete(relativePath);
+      }
+    });
 
     view.onDidDispose(() => {
       changeListener.dispose();
+      selectionListener.dispose();
+      overrideListener.dispose();
       bridge.dispose();
       if (this.bridge === bridge) {
         this.bridge = undefined;
@@ -73,13 +127,15 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private registerHandlers(bridge: HostBridge): void {
-    bridge.handle('tree/getChildren', ({ path }) => this.model.getChildren(path));
+    bridge.handle('tree/getChildren', ({ path: relativePath }) => this.model.getChildren(relativePath));
     bridge.handle('tree/getVisibleRows', () => this.model.getVisibleRows());
-    bridge.handle('tree/toggleExpand', ({ path, expanded }) => {
-      this.model.setExpanded(path, expanded);
+    bridge.handle('tree/toggleExpand', ({ path: relativePath, expanded }) => {
+      this.model.setExpanded(relativePath, expanded);
     });
-    bridge.handle('tree/toggleFile', ({ path, checked }) => this.model.toggleFile(path, checked));
-    bridge.handle('tree/toggleDirectory', ({ path, checked }) => this.model.toggleDirectory(path, checked));
+    bridge.handle('tree/toggleFile', ({ path: relativePath, checked }) => this.model.toggleFile(relativePath, checked));
+    bridge.handle('tree/toggleDirectory', ({ path: relativePath, checked }) =>
+      this.model.toggleDirectory(relativePath, checked),
+    );
     bridge.handle('tree/setSearchQuery', ({ text }) => {
       // On an invalid query (e.g. an unterminated regex while still
       // typing), surface the error and leave the last valid filter in
@@ -101,7 +157,261 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       // there's no TreeItem here to attach it to.
       await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(absolutePath));
     });
+
+    bridge.handle('actions/ready', async () => ({
+      state: await this.computeState(),
+      bookmarks: this.getBookmarks(),
+    }));
+    bridge.handle('actions/setFormat', ({ format }) => {
+      this.currentFormat = format;
+      void this.pushState();
+    });
+    bridge.handle('actions/setInstructions', ({ text }) => {
+      this.currentInstructions = text;
+    });
+    bridge.handle('actions/setDiffEnabled', ({ enabled }) => {
+      this.gitDiffEnabled = enabled;
+      void this.pushState();
+    });
+    bridge.handle('actions/setDiffScope', ({ scope }) => {
+      this.diffScope = scope;
+      if (this.gitDiffEnabled) {
+        void this.pushState();
+      }
+    });
+    bridge.handle('actions/overrideFile', async ({ path: relativePath }) => {
+      this.overriddenPaths.add(relativePath);
+      // Add the overridden path to the selection too, so it actually gets
+      // included on next generate. Fires onDidChangeSelection, which
+      // already triggers pushState() via the listener above.
+      const sel = new Set(this.model.getSelection());
+      sel.add(relativePath);
+      await this.model.setSelection(Array.from(sel));
+    });
+    bridge.handle('actions/generate', () => this.generate());
+
+    bridge.handle('bookmarks/save', () => this.saveBookmark());
+    bridge.handle('bookmarks/load', ({ name }) => this.loadBookmark(name));
+    bridge.handle('bookmarks/delete', async ({ name }) => {
+      await this.store.deleteNamedSet(name);
+      this.pushBookmarks();
+    });
+    bridge.handle('bookmarks/overrideWithCurrent', ({ name }) => this.overrideBookmark(name));
   }
+
+  // -- Config / options -----------------------------------------------------
+
+  private getConfig<T>(key: string, defaultValue: T): T {
+    return vscode.workspace.getConfiguration('aiHandoff').get<T>(key, defaultValue);
+  }
+
+  /** Every workspace folder, as plain data — used for per-repo git diff discovery. */
+  private getWorkspaceFolders(): { name: string; path: string }[] {
+    return (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, path: f.uri.fsPath }));
+  }
+
+  private getHandoffOptions(): HandoffOptions {
+    return {
+      format: this.currentFormat,
+      includeLineNumbers: this.getConfig('includeLineNumbers', false),
+      maxFileSizeKB: this.getConfig('maxFileSizeKB', 1024),
+      respectGitignore: this.getConfig('respectGitignore', true),
+      smartFilter: this.getConfig('smartFilter', true),
+      customIgnorePatterns: this.getConfig<string[]>('customIgnorePatterns', []),
+      binaryHandling: this.getConfig('binaryHandling', 'placeholder'),
+      tokenEstimationRatio: this.getConfig('tokenEstimationRatio', 4),
+      customInstructions: this.getConfig('showCustomInstructions', false) ? this.currentInstructions : undefined,
+      overriddenPaths: Array.from(this.overriddenPaths),
+      gitDiff: { enabled: this.gitDiffEnabled, scope: this.diffScope },
+    };
+  }
+
+  private getSelectedFiles(): SelectedFile[] {
+    return this.model
+      .getSelection()
+      .map((relativePath) => {
+        const absolutePath = this.model.resolveAbsolutePath(relativePath);
+        return absolutePath ? { relativePath, absolutePath } : undefined;
+      })
+      .filter((f): f is SelectedFile => f !== undefined);
+  }
+
+  // -- State / bookmarks push ------------------------------------------------
+
+  /**
+   * Recompute stats for the footer based on the current selection. Runs a
+   * "dry" pipeline pass — generates the handoff text just to count
+   * files/size/tokens. Cheap enough for small projects (matches the old
+   * refreshPanel's own tradeoff, unchanged here).
+   */
+  private async computeState(): Promise<PanelState> {
+    const showCustomInstructions = this.getConfig('showCustomInstructions', false);
+    if (!this.workspaceRoot) {
+      return {
+        stats: formatStatsForPanel({ fileCount: 0, totalSizeBytes: 0, estimatedTokens: 0, diffFileCount: 0 }),
+        format: this.currentFormat,
+        showCustomInstructions,
+        instructions: this.currentInstructions,
+        skipped: [],
+        gitDiffEnabled: this.gitDiffEnabled,
+        diffScope: this.diffScope,
+      };
+    }
+
+    const opts = this.getHandoffOptions();
+    const result = await generateHandoff(
+      this.getSelectedFiles(),
+      opts,
+      this.workspaceRoot,
+      this.getWorkspaceFolders(),
+      this.repoRootCache,
+    );
+    this.lastSkipped = result.skipped.map((s) => ({
+      relativePath: s.relativePath,
+      reason: s.reason,
+      detail: s.detail,
+    }));
+
+    return {
+      stats: formatStatsForPanel(result.stats),
+      format: this.currentFormat,
+      showCustomInstructions,
+      instructions: this.currentInstructions,
+      skipped: this.lastSkipped,
+      gitDiffEnabled: this.gitDiffEnabled,
+      diffScope: this.diffScope,
+    };
+  }
+
+  private async pushState(): Promise<void> {
+    const state = await this.computeState();
+    this.bridge?.emit('state', state);
+  }
+
+  private getBookmarks(): PanelBookmark[] {
+    const named = this.store.listNamedSets();
+    return Object.entries(named).map(([name, paths]) => ({ name, fileCount: paths.length }));
+  }
+
+  private pushBookmarks(): void {
+    this.bridge?.emit('bookmarks', this.getBookmarks());
+  }
+
+  // -- Generate ---------------------------------------------------------------
+
+  private async generate(): Promise<void> {
+    if (!this.workspaceRoot) {
+      this.bridge?.emit('error', { message: 'No workspace folder is open.' });
+      return;
+    }
+    // Git diff is scoped to the current selection, so an empty selection
+    // can't produce a diff-only handoff either — there'd be nothing for the
+    // diff to match against (same reasoning as the legacy runGenerate).
+    if (this.model.getSelection().length === 0) {
+      this.bridge?.emit('error', { message: 'Select at least one file before generating.' });
+      return;
+    }
+
+    this.bridge?.emit('actions/generating', { busy: true });
+    try {
+      const opts = this.getHandoffOptions();
+      const result = await generateHandoff(
+        this.getSelectedFiles(),
+        opts,
+        this.workspaceRoot,
+        this.getWorkspaceFolders(),
+        this.repoRootCache,
+      );
+      const hasDiffContent = (result.diff?.files.length ?? 0) > 0;
+
+      if (result.included.length === 0 && !hasDiffContent) {
+        this.bridge?.emit('error', {
+          message: 'No files made it through the filter. Check the skipped list and use [include anyway] to override.',
+        });
+        await this.pushState();
+        return;
+      }
+
+      if (result.diff?.error) {
+        const message =
+          result.diff.error === 'git-not-found'
+            ? 'git was not found on PATH — diff skipped.'
+            : 'No git repository found in this workspace — diff skipped.';
+        this.bridge?.emit('error', { message });
+      }
+
+      const destinations = await pickDestinations();
+      if (destinations.length === 0) {
+        return;
+      }
+
+      const messages = await dispatchHandoff(result.text, opts.format, destinations);
+      const summary =
+        `AI Handoff: ${result.stats.fileCount} files, ` +
+        `${formatBytes(result.stats.totalSizeBytes)}, ` +
+        `~${formatTokenCount(result.stats.estimatedTokens)} tokens. ` +
+        messages.join('. ');
+      vscode.window.showInformationMessage(summary);
+
+      await this.pushState();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      this.bridge?.emit('error', { message });
+      vscode.window.showErrorMessage(`AI Handoff: ${message}`);
+    } finally {
+      this.bridge?.emit('actions/generating', { busy: false });
+    }
+  }
+
+  // -- Bookmarks ---------------------------------------------------------------
+
+  private async saveBookmark(): Promise<void> {
+    const current = this.model.getSelection();
+    if (current.length === 0) {
+      vscode.window.showWarningMessage('AI Handoff: nothing to bookmark (no files selected).');
+      return;
+    }
+    const name = await vscode.window.showInputBox({
+      prompt: 'Name for this bookmark',
+      placeHolder: 'e.g. "Auth module" or "API layer"',
+      validateInput: (v) => (v.trim().length === 0 ? 'Name cannot be empty' : null),
+    });
+    if (!name) {
+      return;
+    }
+    const existing = this.store.getNamedSet(name);
+    if (existing) {
+      const confirm = await vscode.window.showWarningMessage(
+        `AI Handoff: "${name}" already exists. Overwrite?`,
+        { modal: true },
+        'Overwrite',
+      );
+      if (confirm !== 'Overwrite') {
+        return;
+      }
+    }
+    await this.store.saveNamedSet(name, current);
+    vscode.window.showInformationMessage(`AI Handoff: bookmark "${name}" saved (${current.length} files).`);
+    this.pushBookmarks();
+  }
+
+  private async loadBookmark(name: string): Promise<void> {
+    const paths = this.store.getNamedSet(name) ?? [];
+    await this.model.setSelection(paths);
+  }
+
+  private async overrideBookmark(name: string): Promise<void> {
+    const current = this.model.getSelection();
+    if (current.length === 0) {
+      vscode.window.showWarningMessage('AI Handoff: nothing to override with (no files selected).');
+      return;
+    }
+    await this.store.saveNamedSet(name, current);
+    vscode.window.showInformationMessage(`AI Handoff: bookmark "${name}" updated (${current.length} files).`);
+    this.pushBookmarks();
+  }
+
+  // -- HTML ---------------------------------------------------------------
 
   private renderHtml(webview: vscode.Webview): string {
     const nonce = generateNonce();
@@ -152,10 +462,6 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       display: flex;
       flex-direction: column;
       height: 100%;
-    }
-    /* Actions footer placeholder — stage 6 fills this in. */
-    .actions-footer-placeholder {
-      flex: 0 0 auto;
     }
     .search-header {
       flex: 0 0 auto;
@@ -266,6 +572,152 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
     }
+
+    /* -- Actions footer ---------------------------------------------------- */
+    .actions-footer {
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+      max-height: 60vh;
+      overflow-y: auto;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 4px 12px;
+      margin-bottom: 10px;
+      padding: 6px 10px;
+      background: var(--vscode-editor-inactiveSelectionBackground);
+      border-radius: 4px;
+    }
+    .stats .label { opacity: 0.7; }
+    .stats .value { font-variant-numeric: tabular-nums; font-weight: 500; }
+    .actions-footer label {
+      display: block;
+      margin: 8px 0 4px;
+      opacity: 0.85;
+    }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 8px 0 4px;
+    }
+    .checkbox-row label { margin: 0; opacity: 1; }
+    .checkbox-row input[type="checkbox"] { accent-color: var(--vscode-button-background); }
+    .actions-footer select,
+    .actions-footer textarea {
+      width: 100%;
+      padding: 4px 6px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+    }
+    .actions-footer select:focus,
+    .actions-footer textarea:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+    .actions-footer textarea {
+      min-height: 60px;
+      resize: vertical;
+      font-family: var(--vscode-editor-font-family, monospace);
+    }
+    .actions-footer button.primary {
+      width: 100%;
+      margin-top: 10px;
+      padding: 6px 10px;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border: none;
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      cursor: pointer;
+    }
+    .actions-footer button.primary:hover { background: var(--vscode-button-hoverBackground); }
+    .actions-footer button.primary:disabled { opacity: 0.5; cursor: default; }
+    .actions-footer button.secondary {
+      width: 100%;
+      margin-top: 6px;
+      padding: 4px 10px;
+      background: var(--vscode-button-secondaryBackground, transparent);
+      color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+      border: 1px solid var(--vscode-button-background);
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      cursor: pointer;
+    }
+    .actions-footer button.secondary:hover {
+      background: var(--vscode-button-secondaryHoverBackground, var(--vscode-editor-inactiveSelectionBackground));
+    }
+    .actions-footer .error {
+      margin-top: 8px;
+      padding: 6px 10px;
+      background: var(--vscode-inputValidation-errorBackground);
+      color: var(--vscode-inputValidation-errorForeground, var(--vscode-foreground));
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+      border-radius: 2px;
+      font-size: 0.9em;
+    }
+    /* Tier 2 — collapsible as a group: instructions + bookmarks + skipped. */
+    .tier2-toggle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+      cursor: pointer;
+      opacity: 0.8;
+      user-select: none;
+    }
+    .tier2-toggle:hover { opacity: 1; }
+    .tier2-body.collapsed { display: none; }
+    /* Bookmarks / Skipped files — each its own independently collapsible
+       section with a bounded, separately-scrolling list, so a long list
+       never grows the footer (and squeezes the tree) open-ended. */
+    .subsection { margin-top: 10px; }
+    .subsection-header {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      user-select: none;
+      font-weight: 600;
+      opacity: 0.85;
+    }
+    .subsection-header:hover { opacity: 1; }
+    .subsection-body {
+      margin-top: 4px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .subsection-body.collapsed { display: none; }
+    .subsection-empty { opacity: 0.6; font-style: italic; font-size: 0.9em; }
+    .subsection ul { list-style: none; padding: 0; margin: 0; }
+    .subsection li {
+      padding: 2px 0;
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+      font-size: 0.9em;
+    }
+    .bk-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bk-count { opacity: 0.55; font-size: 0.85em; flex-shrink: 0; }
+    .subsection a.action {
+      color: var(--vscode-textLink-foreground);
+      text-decoration: none;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .subsection a.action:hover { text-decoration: underline; }
+    .subsection li .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
+    .subsection li .detail { opacity: 0.55; font-size: 0.85em; }
   </style>
 </head>
 <body>
@@ -286,13 +738,80 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     <div id="tree-scroll">
       <div id="tree-spacer"></div>
     </div>
-    <div class="actions-footer-placeholder"></div>
+
+    <div class="actions-footer">
+      <div class="stats" aria-label="Selection statistics">
+        <span class="label">Files:</span>
+        <span class="value" id="stat-files">0</span>
+        <span class="label">Size:</span>
+        <span class="value" id="stat-size">0 B</span>
+        <span class="label">Tokens:</span>
+        <span class="value" id="stat-tokens">~0</span>
+        <span class="label hidden" id="stat-diff-label">Diff files:</span>
+        <span class="value hidden" id="stat-diff-files">0</span>
+      </div>
+
+      <label for="format">Output format</label>
+      <select id="format">
+        <option value="xml">XML (best for AI)</option>
+        <option value="markdown">Markdown</option>
+        <option value="plain">Plain text</option>
+      </select>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="diff-enabled" />
+        <label for="diff-enabled">Include git diff</label>
+      </div>
+      <select id="diff-scope" class="hidden">
+        <option value="working">Working (unstaged)</option>
+        <option value="staged">Staged only</option>
+        <option value="both">Both</option>
+      </select>
+
+      <button class="primary" id="generate">Generate Handoff</button>
+      <div id="actions-error" class="error hidden"></div>
+
+      <div class="tier2-toggle" id="tier2-toggle" role="button" aria-expanded="false">
+        <span class="codicon" id="tier2-icon"></span>
+        <span>Instructions, bookmarks &amp; skipped files</span>
+      </div>
+      <div class="tier2-body collapsed" id="tier2-body">
+        <div id="instructions-wrap" class="hidden">
+          <label for="instructions">Custom instructions</label>
+          <textarea id="instructions" placeholder="Optional prompt to prepend (e.g. 'Review this for memory leaks')..."></textarea>
+        </div>
+        <button class="secondary" id="bookmark-save">Save current selection as bookmark</button>
+
+        <div class="subsection">
+          <div class="subsection-header" id="bookmarks-header" role="button" aria-expanded="false">
+            <span class="codicon" id="bookmarks-icon"></span>
+            <span>Bookmarks (<span id="bookmarks-count">0</span>)</span>
+          </div>
+          <div class="subsection-body collapsed" id="bookmarks-body">
+            <div class="subsection-empty" id="bookmarks-empty">No bookmarks saved yet.</div>
+            <ul id="bookmark-list"></ul>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-header" id="skipped-header" role="button" aria-expanded="false">
+            <span class="codicon" id="skipped-icon"></span>
+            <span>Skipped files (<span id="skip-count">0</span>)</span>
+          </div>
+          <div class="subsection-body collapsed" id="skipped-body">
+            <div class="subsection-empty" id="skip-empty">None — all selected files included.</div>
+            <ul id="skip-list"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script nonce="${nonce}" src="${mediaUri('bridge-client.js')}"></script>
   <script nonce="${nonce}" src="${mediaUri('virtual-list.js')}"></script>
   <script nonce="${nonce}" src="${mediaUri('tree-render.js')}"></script>
   <script nonce="${nonce}" src="${mediaUri('search-render.js')}"></script>
+  <script nonce="${nonce}" src="${mediaUri('actions-render.js')}"></script>
   <script nonce="${nonce}" src="${mediaUri('main.js')}"></script>
 </body>
 </html>`;
