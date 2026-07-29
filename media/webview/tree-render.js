@@ -31,6 +31,7 @@
     var clearSelectionBtn = document.getElementById('clear-selection');
     var showSelectedOnlyBtn = document.getElementById('show-selected-only');
     var collapseAllBtn = document.getElementById('collapse-all');
+    var refreshBtn = document.getElementById('refresh');
 
     /** Flat, ordered TreeNodeInfo[] from the host — see FileTreeModel.getVisibleRows(). */
     var rows = [];
@@ -376,6 +377,13 @@
         showSelectedOnlyBtn.setAttribute('aria-pressed', 'false');
       }
       bridge.call('tree/collapseAll', undefined).then(refetchAndRender);
+    });
+
+    // No .then(refetchAndRender) needed — actions/refresh's model.refresh()
+    // fires onDidChangeTree host-side, same as clearSelection above, which
+    // lands us back in refetchAndRender via the tree/invalidated listener.
+    refreshBtn.addEventListener('click', function () {
+      bridge.call('actions/refresh', undefined);
     });
 
     refetchAndRender();

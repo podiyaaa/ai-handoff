@@ -834,6 +834,9 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         <button class="icon-btn" id="clear-selection" title="Unselect all" aria-label="Unselect all">
           <span class="codicon">&#xEABF;</span>
         </button>
+        <button class="icon-btn" id="refresh" title="Refresh" aria-label="Refresh">
+          <span class="codicon">&#xEB37;</span>
+        </button>
       </div>
       <div class="search-wrap">
         <input
@@ -881,7 +884,6 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       </select>
 
       <button class="primary" id="generate">Generate Handoff</button>
-      <button class="secondary" id="refresh">Refresh</button>
       <div id="actions-error" class="error hidden"></div>
 
       <div class="tier2-toggle" id="tier2-toggle" role="button" aria-expanded="false">
