@@ -475,6 +475,51 @@ describe('FileTreeModel — background search index', () => {
     expect(await collectVisiblePaths(model)).to.include('node_modules/login.js');
   });
 
+  it('excludes directories matching searchExcludeDirs, on top of the smart-filter defaults', async () => {
+    // Deliberately NOT 'vendor' — that's already a smart-filter default, which
+    // would leave this test passing even if searchExcludeDirs did nothing.
+    await fs.mkdir(path.join(root, 'third-party'), { recursive: true });
+    await fs.writeFile(path.join(root, 'third-party', 'login.php'), '// third party');
+    model = new FileTreeModel([fakeFolder(root, 0)], [], true, 'third-party');
+    await model.buildSearchIndex();
+    model.setSearchQuery(parseSearchQuery('login').query);
+    const visible = await collectVisiblePaths(model);
+    expect(visible).to.not.include('third-party/login.php');
+    expect(visible).to.include('src/auth/login.ts');
+  });
+
+  it('supports comma-separated, wildcard glob patterns', async () => {
+    await fs.mkdir(path.join(root, 'generated'), { recursive: true });
+    await fs.writeFile(path.join(root, 'generated', 'login.gen.ts'), '// generated');
+    await fs.mkdir(path.join(root, 'pkg.egg-info'), { recursive: true });
+    await fs.writeFile(path.join(root, 'pkg.egg-info', 'login-notes.txt'), 'login notes');
+    model = new FileTreeModel([fakeFolder(root, 0)], [], true, 'generated,*.egg-info');
+    await model.buildSearchIndex();
+    model.setSearchQuery(parseSearchQuery('login').query);
+    const visible = await collectVisiblePaths(model);
+    expect(visible).to.not.include('generated/login.gen.ts');
+    expect(visible).to.not.include('pkg.egg-info/login-notes.txt');
+    expect(visible).to.include('src/auth/login.ts');
+  });
+
+  it('setSearchExcludeDirs() rebuilds and surfaces the newly-excluded/re-included paths', async () => {
+    // Deliberately NOT named 'vendor' — that's already a smart-filter
+    // default, which would make this ambiguous about which setting is
+    // actually doing the excluding.
+    await fs.mkdir(path.join(root, 'third-party'), { recursive: true });
+    await fs.writeFile(path.join(root, 'third-party', 'login.php'), '// third party');
+    model = new FileTreeModel([fakeFolder(root, 0)]);
+    await model.buildSearchIndex();
+    model.setSearchQuery(parseSearchQuery('login').query);
+    expect(await collectVisiblePaths(model)).to.include('third-party/login.php');
+
+    await model.setSearchExcludeDirs('third-party');
+    expect(await collectVisiblePaths(model)).to.not.include('third-party/login.php');
+
+    await model.setSearchExcludeDirs('');
+    expect(await collectVisiblePaths(model)).to.include('third-party/login.php');
+  });
+
   it('a stale in-flight build does not clobber a newer one', async () => {
     model = new FileTreeModel([fakeFolder(root, 0)]);
     const stale = model.buildSearchIndex();

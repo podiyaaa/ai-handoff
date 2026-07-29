@@ -77,6 +77,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.workspaceFolders,
     initialSelection,
     getConfig('searchSkipJunkDirs', true),
+    getConfig('searchExcludeDirs', ''),
   );
   const treeView = vscode.window.createTreeView('aiHandoff.fileTree', {
     treeDataProvider: treeProvider,
@@ -112,6 +113,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.workspaceFolders,
     [],
     getConfig('searchSkipJunkDirs', true),
+    getConfig('searchExcludeDirs', ''),
   );
   void fileTreeModel.buildSearchIndex();
   const handoffPanel = new HandoffPanelProvider(context.extensionUri, fileTreeModel, store, workspaceRoot);
@@ -128,6 +130,11 @@ export function activate(context: vscode.ExtensionContext): void {
         const skipJunk = getConfig('searchSkipJunkDirs', true);
         void treeProvider.setSkipJunkInIndex(skipJunk);
         void fileTreeModel.setSkipJunkInIndex(skipJunk);
+      }
+      if (e.affectsConfiguration('aiHandoff.searchExcludeDirs')) {
+        const excludeDirs = getConfig('searchExcludeDirs', '');
+        void treeProvider.setSearchExcludeDirs(excludeDirs);
+        void fileTreeModel.setSearchExcludeDirs(excludeDirs);
       }
     }),
   );

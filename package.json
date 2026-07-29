@@ -265,6 +265,11 @@
           "type": "boolean",
           "default": true,
           "description": "When building the sidebar search index, skip common junk paths (node_modules, .git, dist, build, lock files, etc. — the same defaults as the smart filter) so they don't clutter search results. Turn off to make everything searchable."
+        },
+        "aiHandoff.searchExcludeDirs": {
+          "type": "string",
+          "default": "",
+          "description": "Comma-separated directory glob patterns to additionally exclude from the sidebar search index (e.g. \"vendor,coverage,**/generated\"). Applied on top of searchSkipJunkDirs, not instead of it."
         }
       }
     }

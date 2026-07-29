@@ -311,6 +311,35 @@ describe('FileTreeProvider — background search index', () => {
     expect(await collectVisiblePaths(provider)).to.include('node_modules/login.js');
   });
 
+  it('excludes directories matching searchExcludeDirs, on top of the smart-filter defaults', async () => {
+    // Deliberately NOT 'vendor' — that's already a smart-filter default,
+    // which would leave this test passing even if searchExcludeDirs did
+    // nothing.
+    await fs.mkdir(path.join(root, 'third-party'), { recursive: true });
+    await fs.writeFile(path.join(root, 'third-party', 'login.php'), '// third party');
+    provider = new FileTreeProvider([fakeFolder(root, 0)], [], true, 'third-party');
+    await provider.buildSearchIndex();
+    provider.setSearchQuery(parseSearchQuery('login').query);
+    const visible = await collectVisiblePaths(provider);
+    expect(visible).to.not.include('third-party/login.php');
+    expect(visible).to.include('src/auth/login.ts');
+  });
+
+  it('setSearchExcludeDirs() rebuilds and surfaces the newly-excluded/re-included paths', async () => {
+    await fs.mkdir(path.join(root, 'third-party'), { recursive: true });
+    await fs.writeFile(path.join(root, 'third-party', 'login.php'), '// third party');
+    provider = new FileTreeProvider([fakeFolder(root, 0)]);
+    await provider.buildSearchIndex();
+    provider.setSearchQuery(parseSearchQuery('login').query);
+    expect(await collectVisiblePaths(provider)).to.include('third-party/login.php');
+
+    await provider.setSearchExcludeDirs('third-party');
+    expect(await collectVisiblePaths(provider)).to.not.include('third-party/login.php');
+
+    await provider.setSearchExcludeDirs('');
+    expect(await collectVisiblePaths(provider)).to.include('third-party/login.php');
+  });
+
   it('a stale in-flight build does not clobber a newer one', async () => {
     provider = new FileTreeProvider([fakeFolder(root, 0)]);
     const stale = provider.buildSearchIndex();

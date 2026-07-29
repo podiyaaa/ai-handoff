@@ -29,7 +29,7 @@
 import ignore, { Ignore } from 'ignore';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { DEFAULT_SMART_FILTER_PATTERNS, FilterChain } from '../core/filter';
+import { DEFAULT_SMART_FILTER_PATTERNS, FilterChain, parseSearchExcludeDirs } from '../core/filter';
 import { matchesSearchQuery, ParsedSearchQuery } from '../core/search-filter';
 
 /** A single file entry in the background search index. */
@@ -187,6 +187,8 @@ export class FileTreeProvider
   private indexBuildGeneration = 0;
   /** Whether the index build should skip smart-filter junk paths (`aiHandoff.searchSkipJunkDirs`). */
   private skipJunkInIndex = true;
+  /** Raw `aiHandoff.searchExcludeDirs` config value — parsed fresh on each `buildSearchIndex()` call. */
+  private searchExcludeDirs = '';
   private rebuildDebounceHandle: ReturnType<typeof setTimeout> | undefined;
 
   private readonly workspaceFolders: readonly vscode.WorkspaceFolder[];
@@ -195,9 +197,11 @@ export class FileTreeProvider
     workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined,
     initialSelection: string[] = [],
     skipJunkInIndex = true,
+    searchExcludeDirs = '',
   ) {
     this.workspaceFolders = workspaceFolders ?? [];
     this.skipJunkInIndex = skipJunkInIndex;
+    this.searchExcludeDirs = searchExcludeDirs;
     for (const p of initialSelection) {
       this.selected.add(p);
     }
@@ -645,6 +649,21 @@ export class FileTreeProvider
   }
 
   /**
+   * Set `aiHandoff.searchExcludeDirs` — a comma-separated list of directory
+   * glob patterns to keep out of the search index, on top of whatever
+   * `skipJunkInIndex` already excludes. Triggers a rebuild if the value
+   * actually changed (parsing happens fresh inside `buildSearchIndex()`, not
+   * here, so the raw string is what's compared).
+   */
+  async setSearchExcludeDirs(value: string): Promise<void> {
+    if (this.searchExcludeDirs === value) {
+      return;
+    }
+    this.searchExcludeDirs = value;
+    await this.buildSearchIndex();
+  }
+
+  /**
    * Walk every workspace folder once, building a flat list of every file's
    * relative path for instant in-memory search matching (see `searchIndex`
    * above). Safe to call repeatedly — e.g. from the file watcher below —
@@ -654,9 +673,11 @@ export class FileTreeProvider
    */
   async buildSearchIndex(): Promise<void> {
     const generation = ++this.indexBuildGeneration;
-    const junkIgnore: Ignore | null = this.skipJunkInIndex
-      ? ignore().add([...DEFAULT_SMART_FILTER_PATTERNS])
-      : null;
+    const excludePatterns: string[] = [
+      ...(this.skipJunkInIndex ? DEFAULT_SMART_FILTER_PATTERNS : []),
+      ...parseSearchExcludeDirs(this.searchExcludeDirs),
+    ];
+    const excludeIgnore: Ignore | null = excludePatterns.length > 0 ? ignore().add(excludePatterns) : null;
 
     // Match toRelative()'s convention: only prefix with the folder name in a
     // multi-root workspace — a single-root workspace's paths must stay
@@ -665,7 +686,7 @@ export class FileTreeProvider
     const multiRoot = this.workspaceFolders.length > 1;
     const out: SearchIndexEntry[] = [];
     for (const folder of this.workspaceFolders) {
-      await this.walkForIndex(folder.uri.fsPath, multiRoot ? folder.name : undefined, '', junkIgnore, out);
+      await this.walkForIndex(folder.uri.fsPath, multiRoot ? folder.name : undefined, '', excludeIgnore, out);
     }
 
     if (generation !== this.indexBuildGeneration) {
@@ -697,7 +718,7 @@ export class FileTreeProvider
     absDir: string,
     folderName: string | undefined,
     folderRelDir: string,
-    junkIgnore: Ignore | null,
+    excludeIgnore: Ignore | null,
     out: SearchIndexEntry[],
   ): Promise<void> {
     let entries: [string, vscode.FileType][];
@@ -712,12 +733,12 @@ export class FileTreeProvider
       }
       const isDirectory = (type & vscode.FileType.Directory) !== 0;
       const folderRelPath = folderRelDir ? `${folderRelDir}/${name}` : name;
-      if (junkIgnore?.ignores(isDirectory ? `${folderRelPath}/` : folderRelPath)) {
+      if (excludeIgnore?.ignores(isDirectory ? `${folderRelPath}/` : folderRelPath)) {
         continue;
       }
       const absPath = path.join(absDir, name);
       if (isDirectory) {
-        await this.walkForIndex(absPath, folderName, folderRelPath, junkIgnore, out);
+        await this.walkForIndex(absPath, folderName, folderRelPath, excludeIgnore, out);
       } else if ((type & vscode.FileType.File) !== 0) {
         const relativePath = folderName ? `${folderName}/${folderRelPath}` : folderRelPath;
         out.push({ relativePath, name });
