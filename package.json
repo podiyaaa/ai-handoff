@@ -120,13 +120,6 @@
           "command": "aiHandoff.generateFromEditor",
           "group": "7_modification@99"
         }
-      ],
-      "view/title": [
-        {
-          "command": "aiHandoff.refreshTree",
-          "when": "view == aiHandoff.mainView",
-          "group": "navigation@1"
-        }
       ]
     },
     "configuration": {

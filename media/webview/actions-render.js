@@ -1,14 +1,14 @@
 /**
  * Actions footer wiring for the merged sidebar webview — format picker,
- * custom instructions, git diff controls, Generate button, bookmarks, and
- * skipped files. Ported from the old action-panel.ts's inline script,
- * adapted to call bridge methods instead of posting raw messages, and to
- * the tiered/collapsible layout (see handoff-panel.ts's renderHtml doc):
- * Tier 1 (format/diff/generate/stats) is always visible; Tier 2
- * (instructions + bookmarks + skipped) collapses as one group, and within
- * it, Bookmarks and Skipped files each have their own independent
- * collapsible header + bounded-height scroll region, so a long list never
- * grows the footer and squeezes the tree.
+ * custom instructions, git diff controls, Generate/Refresh buttons,
+ * bookmarks, and skipped files. Ported from the old action-panel.ts's
+ * inline script, adapted to call bridge methods instead of posting raw
+ * messages, and to the tiered/collapsible layout (see handoff-panel.ts's
+ * renderHtml doc): Tier 1 (format/diff/generate/refresh/stats) is always
+ * visible; Tier 2 (instructions + bookmarks + skipped) collapses as one
+ * group, and within it, Bookmarks and Skipped files each have their own
+ * independent collapsible header + bounded-height scroll region, so a long
+ * list never grows the footer and squeezes the tree.
  *
  * Takes an already-constructed `bridge`, same reason as tree-render.js/
  * search-render.js: acquireVsCodeApi() can only be called once per webview.
@@ -26,6 +26,7 @@
     var $insWrap = document.getElementById('instructions-wrap');
     var $ins = document.getElementById('instructions');
     var $btn = document.getElementById('generate');
+    var $refresh = document.getElementById('refresh');
     var $actionsError = document.getElementById('actions-error');
     var $bookmarkSave = document.getElementById('bookmark-save');
     var $bookmarksEmpty = document.getElementById('bookmarks-empty');
@@ -87,6 +88,9 @@
     });
     $btn.addEventListener('click', function () {
       bridge.call('actions/generate', undefined);
+    });
+    $refresh.addEventListener('click', function () {
+      bridge.call('actions/refresh', undefined);
     });
     $bookmarkSave.addEventListener('click', function () {
       bridge.call('bookmarks/save', undefined);

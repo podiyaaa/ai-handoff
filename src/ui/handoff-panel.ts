@@ -208,6 +208,11 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       await this.model.setSelection(Array.from(sel));
     });
     bridge.handle('actions/generate', () => this.generate());
+    bridge.handle('actions/refresh', () => {
+      this.model.refresh();
+      this.invalidateRepoRootCache();
+      void this.pushState();
+    });
 
     bridge.handle('bookmarks/save', () => this.saveBookmark());
     bridge.handle('bookmarks/load', ({ name }) => this.loadBookmark(name));
@@ -876,6 +881,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       </select>
 
       <button class="primary" id="generate">Generate Handoff</button>
+      <button class="secondary" id="refresh">Refresh</button>
       <div id="actions-error" class="error hidden"></div>
 
       <div class="tier2-toggle" id="tier2-toggle" role="button" aria-expanded="false">

@@ -134,6 +134,7 @@ describe('HandoffPanelProvider', () => {
     expect(view.webview.html).to.include('id="clear-selection"');
     expect(view.webview.html).to.include('id="show-selected-only"');
     expect(view.webview.html).to.include('id="collapse-all"');
+    expect(view.webview.html).to.include('id="refresh"');
     expect(view.webview.html).to.include('role="tree"');
   });
 
@@ -619,5 +620,24 @@ describe('HandoffPanelProvider', () => {
     provider.resolveWebviewView(view);
 
     expect(() => provider.invalidateRepoRootCache()).to.not.throw();
+  });
+
+  it('actions/refresh triggers a tree/invalidated event and pushes updated state', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/refresh', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    const invalidatedEvent = posted.find(
+      (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'tree/invalidated',
+    );
+    expect(invalidatedEvent, 'model.refresh() should fire onDidChangeTree, surfaced as tree/invalidated').to.exist;
+
+    const stateEvent = posted.find(
+      (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'state',
+    );
+    expect(stateEvent, 'actions/refresh should also push fresh stats').to.exist;
   });
 });

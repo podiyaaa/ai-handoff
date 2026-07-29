@@ -108,6 +108,13 @@ export interface BridgeMethods {
   'actions/setDiffScope': { params: { scope: DiffScope }; result: void };
   'actions/generate': { params: void; result: void };
   'actions/overrideFile': { params: { path: string }; result: void };
+  /**
+   * Manual refresh — re-reads the tree from disk and invalidates the
+   * git-diff repo-root cache (repo layouts rarely change mid-session, so
+   * that discovery is normally memoized). Moved here from a native
+   * view/title icon once the merged webview grew its own toolbar/footer.
+   */
+  'actions/refresh': { params: void; result: void };
   'bookmarks/save': { params: void; result: void };
   'bookmarks/load': { params: { name: string }; result: void };
   'bookmarks/delete': { params: { name: string }; result: void };
