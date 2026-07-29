@@ -13,8 +13,9 @@
  *   - Directory tree section
  */
 
-import type { DiffFileChange, GitDiffResult, IncludedFile, OutputFormat, SkippedFile } from './types';
+import type { DiffFileChange, GitDiffResult, HandoffStats, IncludedFile, OutputFormat, SkippedFile } from './types';
 import { formatBytes } from './filter';
+import { formatTokenCount } from './token-estimator';
 
 /**
  * Options for formatHandoff.
@@ -66,6 +67,22 @@ export function formatHandoff(included: IncludedFile[], options: FormatOptions):
   }
 
   return parts.join('\n\n');
+}
+
+/**
+ * Pre-format stats for display (so a renderer — the webview, previously
+ * also the old action-panel.ts — stays a dumb renderer rather than
+ * duplicating formatBytes()/formatTokenCount() logic itself).
+ */
+export function formatStatsForPanel(stats: HandoffStats): HandoffStats & {
+  sizeFormatted: string;
+  tokensFormatted: string;
+} {
+  return {
+    ...stats,
+    sizeFormatted: formatBytes(stats.totalSizeBytes),
+    tokensFormatted: formatTokenCount(stats.estimatedTokens),
+  };
 }
 
 /**

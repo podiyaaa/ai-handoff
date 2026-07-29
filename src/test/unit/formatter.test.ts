@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import {
   formatHandoff,
+  formatStatsForPanel,
   getLanguageForPath,
   applyLineNumbers,
   chooseFence,
@@ -98,6 +99,20 @@ describe('applyLineNumbers', () => {
     const out = applyLineNumbers('a\nb\nc', 98).split('\n');
     expect(out[0]).to.equal(' 98  a');
     expect(out[2]).to.equal('100  c');
+  });
+});
+
+describe('formatStatsForPanel', () => {
+  it('adds formatted size and token strings alongside the raw stats', () => {
+    const out = formatStatsForPanel({
+      fileCount: 3,
+      totalSizeBytes: 24576,
+      estimatedTokens: 1500,
+      diffFileCount: 0,
+    });
+    expect(out.fileCount).to.equal(3);
+    expect(out.sizeFormatted).to.equal('24.0 KB');
+    expect(out.tokensFormatted).to.equal('1.5k');
   });
 });
 

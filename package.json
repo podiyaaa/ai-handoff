@@ -48,28 +48,9 @@
     "views": {
       "aiHandoff": [
         {
-          "id": "aiHandoff.searchBar",
-          "name": "Search",
-          "type": "webview",
-          "contextualTitle": "AI Handoff"
-        },
-        {
-          "icon": "media/icon.png",
-          "id": "aiHandoff.fileTree",
-          "name": "Files",
-          "contextualTitle": "AI Handoff"
-        },
-        {
-          "icon": "media/icon.svg",
-          "id": "aiHandoff.actionPanel",
-          "name": "Actions",
-          "type": "webview",
-          "contextualTitle": "AI Handoff"
-        },
-        {
           "icon": "media/icon.png",
           "id": "aiHandoff.mainView",
-          "name": "AI Handoff (preview — work in progress)",
+          "name": "AI Handoff",
           "type": "webview",
           "contextualTitle": "AI Handoff"
         }
@@ -143,13 +124,8 @@
       "view/title": [
         {
           "command": "aiHandoff.refreshTree",
-          "when": "view == aiHandoff.fileTree",
+          "when": "view == aiHandoff.mainView",
           "group": "navigation@1"
-        },
-        {
-          "command": "aiHandoff.clearSelection",
-          "when": "view == aiHandoff.fileTree",
-          "group": "navigation@3"
         }
       ]
     },

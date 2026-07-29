@@ -2,17 +2,23 @@
  * AI Handoff — extension entry point.
  *
  * Wires together:
- *   - TreeView (FileTreeProvider) on the sidebar
- *   - Webview action panel (ActionPanelProvider) below it
- *   - Command handlers for explorer right-click and panel button
+ *   - The merged sidebar webview (HandoffPanelProvider): search + virtualized
+ *     file tree + actions footer, all backed by FileTreeModel
+ *   - Command handlers for explorer/editor right-click and the command palette
  *   - Selection persistence (SelectionStore)
  *   - Output dispatch (clipboard / file / tab)
+ *
+ * This used to also wire up three legacy views (a native TreeView, a
+ * standalone search-bar webview, and a separate actions webview) alongside
+ * the merged one during the webview-merge rewrite. That cutover is done —
+ * FileTreeModel/HandoffPanelProvider are the only tree/actions
+ * implementation left, see git history (`feature/tree-search-webview-merge`)
+ * for how it got here.
  */
 
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { formatBytes } from './core/filter';
-import { parseSearchQuery } from './core/search-filter';
 import { formatTokenCount } from './core/token-estimator';
 import type {
   DiffScope,
@@ -25,23 +31,8 @@ import { FileTreeModel } from './services/file-tree-model';
 import { RepoRootCache } from './services/git-diff-reader';
 import { generateHandoff } from './services/handoff-generator';
 import { SelectionStore } from './services/selection-store';
-import { ActionPanelProvider, formatStatsForPanel } from './ui/action-panel';
-import { FileTreeItem, FileTreeProvider } from './ui/file-tree-provider';
 import { HandoffPanelProvider } from './ui/handoff-panel';
 import { dispatchHandoff, pickDestinations } from './ui/output-picker';
-import { SearchBarProvider } from './ui/search-bar-panel';
-
-// In-memory transient state — not persisted, lives for the session
-interface SessionState {
-  currentFormat: OutputFormat;
-  currentInstructions: string;
-  overriddenPaths: Set<string>;
-  lastSkipped: Array<{ relativePath: string; reason: string; detail?: string }>;
-  gitDiffEnabled: boolean;
-  diffScope: DiffScope;
-  /** Memoizes nested-repo discovery for git diff — see RepoRootCache. Invalidated by the sidebar's "Refresh" button. */
-  repoRootCache: RepoRootCache;
-}
 
 export function activate(context: vscode.ExtensionContext): void {
   // Safety net: throw immediately if anything tries to make a network call.
@@ -51,71 +42,35 @@ export function activate(context: vscode.ExtensionContext): void {
   const workspaceRoot = getWorkspaceRoot();
   const store = new SelectionStore(context.workspaceState);
 
-  // Load persisted last selection if enabled
+  // Load persisted last selection if enabled — the one thing FileTreeModel
+  // couldn't inherit for free while the legacy Files view was still around
+  // sharing the same persisted `aiHandoff.selectionMemory` state (it started
+  // empty on every launch to avoid silently reappearing with stale
+  // checkboxes). Now that this is the only tree, it owns both reading this
+  // at startup (here) and writing it on every change (HandoffPanelProvider's
+  // own selection listener).
   const memoryMode = getConfig<SelectionMemoryMode>('selectionMemory', 'lastOnly');
   const initialSelection =
-    memoryMode === 'lastOnly' || memoryMode === 'both'
-      ? store.getLastSelection() ?? []
-      : [];
+    memoryMode === 'lastOnly' || memoryMode === 'both' ? store.getLastSelection() ?? [] : [];
 
-  const initialFormat = getConfig<OutputFormat>('outputFormat', 'xml');
+  // Repo layouts rarely change mid-session, so git diff's nested-repo
+  // discovery is cached. HandoffPanelProvider owns its own instance (used
+  // for the tree's own Generate button); this one is for the standalone
+  // explorer/editor-context generate commands below, which don't go through
+  // the panel at all.
+  const adHocRepoRootCache = new RepoRootCache();
 
-  const session: SessionState = {
-    currentFormat: initialFormat,
-    currentInstructions: '',
-    overriddenPaths: new Set(),
-    lastSkipped: [],
-    gitDiffEnabled: getConfig('gitDiffEnabledByDefault', false),
-    diffScope: getConfig<DiffScope>('gitDiffScope', 'working'),
-    repoRootCache: new RepoRootCache(),
-  };
-
-  // -- Tree provider --
-  // Pass every workspace folder (not just the first) so multi-root
-  // workspaces can select files from all of them, not just folders[0].
-  const treeProvider = new FileTreeProvider(
+  const fileTreeModel = new FileTreeModel(
     vscode.workspace.workspaceFolders,
     initialSelection,
     getConfig('searchSkipJunkDirs', true),
     getConfig('searchExcludeDirs', ''),
   );
-  const treeView = vscode.window.createTreeView('aiHandoff.fileTree', {
-    treeDataProvider: treeProvider,
-    canSelectMany: false,
-  });
-  // Native checkbox events
-  treeView.onDidChangeCheckboxState(async (e) => {
-    await treeProvider.handleCheckboxChange(e.items);
-  });
-
-  // -- Background search index --
-  // Kick off the initial build with a progress indicator (this is the one
-  // walk that can take a while on a huge project); subsequent rebuilds
-  // triggered by the file watcher happen silently in the background.
   void vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: 'AI Handoff: indexing files for search…' },
-    () => treeProvider.buildSearchIndex(),
+    () => fileTreeModel.buildSearchIndex(),
   );
-  // -- New merged sidebar webview (work in progress) --
-  // Registered alongside the three legacy views above, not replacing them —
-  // this is being built up in stages behind its own view id
-  // (aiHandoff.mainView) until a final cutover stage removes the legacy
-  // views/providers. The initial index build is silent (no progress UI)
-  // rather than duplicating the legacy tree's "indexing files…" notification.
-  //
-  // Deliberately starts with an empty selection, NOT `initialSelection` —
-  // selection persistence for this new provider hasn't been designed yet
-  // (that's a stage 6/8 decision, once it's wired to session/Actions state
-  // for real); until then it should never silently inherit whatever the
-  // legacy Files view happened to have persisted, which read as "stale
-  // selection surviving every reload" during manual testing.
-  const fileTreeModel = new FileTreeModel(
-    vscode.workspace.workspaceFolders,
-    [],
-    getConfig('searchSkipJunkDirs', true),
-    getConfig('searchExcludeDirs', ''),
-  );
-  void fileTreeModel.buildSearchIndex();
+
   const handoffPanel = new HandoffPanelProvider(context.extensionUri, fileTreeModel, store, workspaceRoot);
   context.subscriptions.push(
     fileTreeModel,
@@ -127,235 +82,16 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('aiHandoff.searchSkipJunkDirs')) {
-        const skipJunk = getConfig('searchSkipJunkDirs', true);
-        void treeProvider.setSkipJunkInIndex(skipJunk);
-        void fileTreeModel.setSkipJunkInIndex(skipJunk);
+        void fileTreeModel.setSkipJunkInIndex(getConfig('searchSkipJunkDirs', true));
       }
       if (e.affectsConfiguration('aiHandoff.searchExcludeDirs')) {
-        const excludeDirs = getConfig('searchExcludeDirs', '');
-        void treeProvider.setSearchExcludeDirs(excludeDirs);
-        void fileTreeModel.setSearchExcludeDirs(excludeDirs);
+        void fileTreeModel.setSearchExcludeDirs(getConfig('searchExcludeDirs', ''));
       }
     }),
   );
-
-  // Serializes revealAllDirectories calls: a search-match walk has real UI
-  // latency per reveal() call, so it isn't instant. If another search change
-  // arrives while a walk is still running, two overlapping walks would both
-  // be calling reveal() against the same tree at once — coalesce instead:
-  // note that another pass is needed and run exactly one more once the
-  // current walk finishes, reflecting whatever the search state is by then
-  // (rather than queueing every intermediate request, which could pile up
-  // under rapid typing).
-  let revealInFlight: Thenable<void> | undefined;
-  let revealAgainRequested = false;
-  async function requestRevealMatchingDirectories(): Promise<void> {
-    if (revealInFlight) {
-      revealAgainRequested = true;
-      return;
-    }
-    revealAgainRequested = false;
-    revealInFlight = vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Window, title: 'AI Handoff: expanding folders…' },
-      () => revealAllDirectories(treeProvider, treeView),
-    );
-    try {
-      await revealInFlight;
-    } finally {
-      revealInFlight = undefined;
-      if (revealAgainRequested) {
-        await requestRevealMatchingDirectories();
-      }
-    }
-  }
-
-  // -- Search bar (pinned above the Files tree) --
-  const searchBar = new SearchBarProvider(context.extensionUri);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(SearchBarProvider.viewType, searchBar, {
-      webviewOptions: { retainContextWhenHidden: true },
-    }),
-  );
-  searchBar.onDidReceive(async (msg) => {
-    if (msg.type !== 'queryChange') {
-      return;
-    }
-    const { query, error } = parseSearchQuery(msg.text);
-    // On an invalid query (e.g. an unterminated regex while still typing),
-    // surface the error inline and leave the last valid filter in place
-    // rather than flashing the tree back to fully unfiltered every keystroke.
-    searchBar.setError(error);
-    if (error) {
-      return;
-    }
-    treeProvider.setSearchQuery(query);
-    if (!query) {
-      // Search box cleared — do NOT reveal anything. With no active query,
-      // getChildren() returns the entire, unfiltered tree, so forcing every
-      // directory open here would walk (and expand) the whole project. On a
-      // huge repo that's a real hang, not just a cosmetic snap-open. Leave
-      // whatever expand/collapse state the tree already has alone; only an
-      // explicit user action (the disclosure arrow) should open a directory
-      // from here on.
-      return;
-    }
-    // Reveal every directory getChildren() currently returns — while a
-    // search is active that's just the matches (non-matching directories
-    // are already excluded by applySearchFilter), so this walk is bounded by
-    // the result set, not the whole tree. This always wins over any prior
-    // manual collapse — reveal() forces a directory open regardless of its
-    // current state — and nothing here ever collapses anything; only an
-    // explicit user action (the disclosure arrow) does that.
-    //
-    // An earlier investigation wrongly suspected this (and, before it, an
-    // id-churn approach) of causing checkbox clicks to get misrouted to the
-    // wrong node. The actual cause — confirmed via debug logging — was
-    // unrelated: handleCheckboxChange was treating every ancestor directory
-    // VS Code auto-includes in a checkbox-change batch (to keep ancestor
-    // checkboxes visually in sync) as an independent user action, bulk-
-    // selecting whole folders instead of just the clicked file. That's now
-    // fixed at the source (see handleCheckboxChange), so reveal() here is
-    // safe.
-    //
-    // setSearchQuery() above fires _onDidChangeTreeData synchronously, but
-    // that only *notifies* VS Code's tree widget to refresh — there's no way
-    // to await the widget actually having processed it and re-fetched
-    // children internally before we call reveal() below. Confirmed by
-    // debug-log timing: every reveal() call here completes in well under a
-    // second with no errors, yet the visual result was still inconsistent —
-    // consistent with our reveal() calls racing ahead of VS Code's own
-    // internal refresh handling rather than any bug in this code. A short
-    // delay lets that settle first.
-    await new Promise((resolve) => setTimeout(resolve, 75));
-    await requestRevealMatchingDirectories();
-  });
-
-  // -- Action panel --
-  const actionPanel = new ActionPanelProvider(context.extensionUri);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(ActionPanelProvider.viewType, actionPanel, {
-      webviewOptions: { retainContextWhenHidden: true },
-    }),
-  );
-
-  // -- Ticking one specific file's checkbox is a deliberate "include this
-  // exact file" action (e.g. after finding it via search), so auto-register
-  // it as a filter override — unlike ticking a whole folder, which stays
-  // subject to the smart filter/gitignore so bulk-selecting a folder can't
-  // accidentally drag in its node_modules. Runs synchronously so the
-  // override is applied before onDidChangeSelection recomputes stats below.
-  treeProvider.onDidToggleIndividualFile(({ relativePath, checked }) => {
-    if (checked) {
-      session.overriddenPaths.add(relativePath);
-    } else {
-      session.overriddenPaths.delete(relativePath);
-    }
-  });
-
-  // -- React to selection changes by updating the panel stats --
-  treeProvider.onDidChangeSelection(async (selected) => {
-    if (memoryMode === 'lastOnly' || memoryMode === 'both') {
-      await store.setLastSelection(selected);
-    }
-    await refreshPanel(treeProvider, actionPanel, session, workspaceRoot);
-  });
-
-  // -- React to panel events --
-  actionPanel.onDidReceive(async (msg) => {
-    switch (msg.type) {
-      case 'ready':
-        await refreshPanel(treeProvider, actionPanel, session, workspaceRoot);
-        actionPanel.postBookmarks(store.listNamedSets());
-        break;
-      case 'formatChange':
-        session.currentFormat = msg.format;
-        await refreshPanel(treeProvider, actionPanel, session, workspaceRoot);
-        break;
-      case 'instructionsChange':
-        session.currentInstructions = msg.text;
-        break;
-      case 'diffToggle':
-        session.gitDiffEnabled = msg.enabled;
-        await refreshPanel(treeProvider, actionPanel, session, workspaceRoot);
-        break;
-      case 'diffScopeChange':
-        session.diffScope = msg.scope;
-        if (session.gitDiffEnabled) {
-          await refreshPanel(treeProvider, actionPanel, session, workspaceRoot);
-        }
-        break;
-      case 'overrideFile': {
-        session.overriddenPaths.add(msg.path);
-        // Add the overridden path to the selection too, so it actually
-        // gets included on next generate.
-        const sel = new Set(treeProvider.getSelection());
-        sel.add(msg.path);
-        await treeProvider.setSelection(Array.from(sel));
-        break;
-      }
-      case 'generate':
-        await runGenerate(treeProvider, actionPanel, session, workspaceRoot);
-        break;
-      case 'showAll':
-        // Future: support paginated skipped lists
-        break;
-      case 'saveBookmark': {
-        const current = treeProvider.getSelection();
-        if (current.length === 0) {
-          vscode.window.showWarningMessage('AI Handoff: nothing to bookmark (no files selected).');
-          break;
-        }
-        const name = await vscode.window.showInputBox({
-          prompt: 'Name for this bookmark',
-          placeHolder: 'e.g. "Auth module" or "API layer"',
-          validateInput: (v) => (v.trim().length === 0 ? 'Name cannot be empty' : null),
-        });
-        if (!name) {
-          break;
-        }
-        const existing = store.getNamedSet(name);
-        if (existing) {
-          const confirm = await vscode.window.showWarningMessage(
-            `AI Handoff: "${name}" already exists. Overwrite?`,
-            { modal: true },
-            'Overwrite',
-          );
-          if (confirm !== 'Overwrite') {
-            break;
-          }
-        }
-        await store.saveNamedSet(name, current);
-        vscode.window.showInformationMessage(`AI Handoff: bookmark "${name}" saved (${current.length} files).`);
-        actionPanel.postBookmarks(store.listNamedSets());
-        break;
-      }
-      case 'loadBookmark': {
-        const paths = store.getNamedSet(msg.name) ?? [];
-        await treeProvider.setSelection(paths);
-        break;
-      }
-      case 'overrideBookmark': {
-        const current = treeProvider.getSelection();
-        if (current.length === 0) {
-          vscode.window.showWarningMessage('AI Handoff: nothing to override with (no files selected).');
-          break;
-        }
-        await store.saveNamedSet(msg.name, current);
-        vscode.window.showInformationMessage(`AI Handoff: bookmark "${msg.name}" updated (${current.length} files).`);
-        actionPanel.postBookmarks(store.listNamedSets());
-        break;
-      }
-      case 'deleteBookmark': {
-        await store.deleteNamedSet(msg.name);
-        actionPanel.postBookmarks(store.listNamedSets());
-        break;
-      }
-    }
-  });
 
   // -- Commands --
   context.subscriptions.push(
-    treeView,
     vscode.commands.registerCommand('aiHandoff.generateFromExplorer', async (
       ...args: unknown[]
     ) => {
@@ -368,7 +104,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // Each SelectedFile already carries the correct absolutePath regardless
       // of which workspace folder it belongs to.
       const root = workspaceRoot ?? files[0].absolutePath;
-      await doGenerateAndDispatch(files, actionPanel, session, root);
+      await doGenerateAndDispatch(files, root, adHocRepoRootCache);
     }),
     vscode.commands.registerCommand('aiHandoff.generateFromEditor', async (
       ...args: unknown[]
@@ -386,7 +122,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const root = workspaceRoot ?? files[0].absolutePath;
-      await doGenerateAndDispatch(files, actionPanel, session, root);
+      await doGenerateAndDispatch(files, root, adHocRepoRootCache);
     }),
     vscode.commands.registerCommand('aiHandoff.generateFromSelection', async () => {
       const editor = vscode.window.activeTextEditor;
@@ -415,24 +151,21 @@ export function activate(context: vscode.ExtensionContext): void {
       const lineRange = { start: selection.start.line + 1, end: endLine + 1 };
 
       const root = workspaceRoot ?? absolutePath;
-      await doGenerateAndDispatch([{ relativePath, absolutePath, lineRange }], actionPanel, session, root);
+      await doGenerateAndDispatch([{ relativePath, absolutePath, lineRange }], root, adHocRepoRootCache);
     }),
     vscode.commands.registerCommand('aiHandoff.generateFromPanel', async () => {
-      await runGenerate(treeProvider, actionPanel, session, workspaceRoot);
+      await handoffPanel.runGenerate();
     }),
     vscode.commands.registerCommand('aiHandoff.refreshTree', () => {
-      treeProvider.refresh();
-      // Repo layouts rarely change mid-session, so git diff's nested-repo
-      // discovery is cached — this is the manual escape hatch for the rare
-      // case a repo got added/moved/removed since the cache was built.
-      session.repoRootCache.invalidate();
+      fileTreeModel.refresh();
+      handoffPanel.invalidateRepoRootCache();
+      adHocRepoRootCache.invalidate();
     }),
     vscode.commands.registerCommand('aiHandoff.clearSelection', async () => {
-      await treeProvider.clearSelection();
-      session.overriddenPaths.clear();
+      await fileTreeModel.clearSelection();
     }),
     vscode.commands.registerCommand('aiHandoff.saveSelectionSet', async () => {
-      const current = treeProvider.getSelection();
+      const current = fileTreeModel.getSelection();
       if (current.length === 0) {
         vscode.window.showWarningMessage('AI Handoff: nothing to save (no files selected).');
         return;
@@ -469,7 +202,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const paths = store.getNamedSet(pick.label) ?? [];
-      await treeProvider.setSelection(paths);
+      await fileTreeModel.setSelection(paths);
     }),
     vscode.commands.registerCommand('aiHandoff.deleteSelectionSet', async () => {
       const names = store.listSetNames();
@@ -534,46 +267,6 @@ function enforceOffline(): void {
 // Helpers
 // ---------------------------------------------------------------------
 
-/**
- * Force every directory currently returned by getChildren() open, via
- * TreeView.reveal() (the documented API for this) rather than any item-
- * identity trick — so it can't interfere with an in-flight checkbox click.
- * Only ever called while a search query is active, so getChildren() already
- * excludes non-matching directories — this reveals matches, never the whole
- * tree (see the `if (!query) return;` guard at the call site).
- *
- * A single reveal() (or getChildren()) failure must not abort revealing
- * everything else — this is a recursive, sibling-by-sibling walk, and an
- * uncaught rejection partway through would silently stop processing every
- * directory after the failure point (e.g. a failure inside one top-level
- * folder's subtree would prevent a later sibling folder from ever being
- * revealed at all). Every step is wrapped so one bad node is logged and
- * skipped rather than derailing the rest of the walk.
- */
-async function revealAllDirectories(
-  treeProvider: FileTreeProvider,
-  treeView: vscode.TreeView<FileTreeItem>,
-  parent?: FileTreeItem,
-): Promise<void> {
-  let children: FileTreeItem[];
-  try {
-    children = await treeProvider.getChildren(parent);
-  } catch {
-    return;
-  }
-  for (const child of children) {
-    if (child.data.isDirectory) {
-      try {
-        await treeView.reveal(child, { expand: true, select: false, focus: false });
-      } catch {
-        // A single directory failing to reveal must not abort the rest of
-        // the walk — continue recursing into it and on to its siblings.
-      }
-      await revealAllDirectories(treeProvider, treeView, child);
-    }
-  }
-}
-
 function getWorkspaceRoot(): string | undefined {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
@@ -591,9 +284,20 @@ function getConfig<T>(key: string, defaultValue: T): T {
   return vscode.workspace.getConfiguration('aiHandoff').get<T>(key, defaultValue);
 }
 
-function getHandoffOptions(session: SessionState): HandoffOptions {
+/**
+ * HandoffOptions for the standalone explorer/editor-context generate
+ * commands, which don't go through the merged panel (and so have no live
+ * "session" to read a chosen format/diff-toggle/overrides from) — reads
+ * fresh from configured defaults every time, same as HandoffPanelProvider's
+ * own constructor does at startup. A deliberate simplification: these
+ * commands act on an explicit one-off file (or selection), not the tree, so
+ * there's no natural "current session settings" for them to inherit from —
+ * unlike aiHandoff.generateFromPanel, which now goes through
+ * HandoffPanelProvider.runGenerate() and its own live state instead.
+ */
+function getAdHocHandoffOptions(): HandoffOptions {
   return {
-    format: session.currentFormat,
+    format: getConfig<OutputFormat>('outputFormat', 'xml'),
     includeLineNumbers: getConfig('includeLineNumbers', false),
     maxFileSizeKB: getConfig('maxFileSizeKB', 1024),
     respectGitignore: getConfig('respectGitignore', true),
@@ -601,179 +305,72 @@ function getHandoffOptions(session: SessionState): HandoffOptions {
     customIgnorePatterns: getConfig<string[]>('customIgnorePatterns', []),
     binaryHandling: getConfig('binaryHandling', 'placeholder'),
     tokenEstimationRatio: getConfig('tokenEstimationRatio', 4),
-    customInstructions: getConfig('showCustomInstructions', false)
-      ? session.currentInstructions
-      : undefined,
-    overriddenPaths: Array.from(session.overriddenPaths),
-    gitDiff: { enabled: session.gitDiffEnabled, scope: session.diffScope },
+    customInstructions: undefined,
+    overriddenPaths: [],
+    gitDiff: {
+      enabled: getConfig('gitDiffEnabledByDefault', false),
+      scope: getConfig<DiffScope>('gitDiffScope', 'working'),
+    },
   };
 }
 
 /**
- * Recompute stats for the panel based on the current selection.
- * Runs a "dry" pipeline pass — generates the handoff text just to
- * count files/size/tokens. Cheap enough for small projects.
- */
-async function refreshPanel(
-  treeProvider: FileTreeProvider,
-  panel: ActionPanelProvider,
-  session: SessionState,
-  workspaceRoot: string | undefined,
-): Promise<void> {
-  if (!workspaceRoot) {
-    panel.updateState({
-      stats: formatStatsForPanel({ fileCount: 0, totalSizeBytes: 0, estimatedTokens: 0, diffFileCount: 0 }) as never,
-      format: session.currentFormat,
-      showCustomInstructions: getConfig('showCustomInstructions', false),
-      instructions: session.currentInstructions,
-      skipped: [],
-      gitDiffEnabled: session.gitDiffEnabled,
-      diffScope: session.diffScope,
-    });
-    return;
-  }
-
-  const selection = treeProvider.getSelection();
-  const selectedFiles: SelectedFile[] = selection
-    .map((rel) => {
-      const absolutePath = treeProvider.resolveAbsolutePath(rel);
-      return absolutePath ? { relativePath: rel, absolutePath } : undefined;
-    })
-    .filter((f): f is SelectedFile => f !== undefined);
-
-  const opts = getHandoffOptions(session);
-  const result = await generateHandoff(
-    selectedFiles,
-    opts,
-    workspaceRoot,
-    getWorkspaceFolders(),
-    session.repoRootCache,
-  );
-
-  session.lastSkipped = result.skipped.map((s) => ({
-    relativePath: s.relativePath,
-    reason: s.reason,
-    detail: s.detail,
-  }));
-
-  panel.updateState({
-    stats: formatStatsForPanel(result.stats) as never,
-    format: session.currentFormat,
-    showCustomInstructions: getConfig('showCustomInstructions', false),
-    instructions: session.currentInstructions,
-    skipped: session.lastSkipped,
-    gitDiffEnabled: session.gitDiffEnabled,
-    diffScope: session.diffScope,
-  });
-}
-
-/**
- * Core generate+dispatch pipeline. Called by both the panel button and the
- * Explorer right-click handler so the logic lives in one place.
+ * Core generate+dispatch pipeline for the standalone explorer/editor-context
+ * commands (generateFromExplorer/generateFromEditor/generateFromSelection) —
+ * these don't have a panel to show busy/error state in, so progress and
+ * errors surface via vscode.window's own notification APIs instead.
  */
 async function doGenerateAndDispatch(
   selectedFiles: SelectedFile[],
-  panel: ActionPanelProvider,
-  session: SessionState,
   workspaceRoot: string,
+  repoRootCache: RepoRootCache,
 ): Promise<void> {
-  panel.setBusy(true);
-  try {
-    const opts = getHandoffOptions(session);
-    const result = await generateHandoff(
-      selectedFiles,
-      opts,
-      workspaceRoot,
-      getWorkspaceFolders(),
-      session.repoRootCache,
-    );
-    const hasDiffContent = (result.diff?.files.length ?? 0) > 0;
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'AI Handoff: generating…' },
+    async () => {
+      try {
+        const opts = getAdHocHandoffOptions();
+        const result = await generateHandoff(
+          selectedFiles,
+          opts,
+          workspaceRoot,
+          getWorkspaceFolders(),
+          repoRootCache,
+        );
+        const hasDiffContent = (result.diff?.files.length ?? 0) > 0;
 
-    if (result.included.length === 0 && !hasDiffContent) {
-      panel.showError(
-        'No files made it through the filter. Check the skipped list and use [include anyway] to override.',
-      );
-      session.lastSkipped = result.skipped.map((s) => ({
-        relativePath: s.relativePath,
-        reason: s.reason,
-        detail: s.detail,
-      }));
-      panel.updateState({
-        stats: formatStatsForPanel(result.stats) as never,
-        skipped: session.lastSkipped,
-      });
-      return;
-    }
+        if (result.included.length === 0 && !hasDiffContent) {
+          vscode.window.showWarningMessage(
+            'AI Handoff: no files made it through the filter. Check the skipped list and use [include anyway] to override.',
+          );
+          return;
+        }
 
-    if (result.diff?.error) {
-      const message =
-        result.diff.error === 'git-not-found'
-          ? 'git was not found on PATH — diff skipped.'
-          : 'No git repository found in this workspace — diff skipped.';
-      panel.showError(message);
-    }
+        if (result.diff?.error) {
+          const message =
+            result.diff.error === 'git-not-found'
+              ? 'git was not found on PATH — diff skipped.'
+              : 'No git repository found in this workspace — diff skipped.';
+          vscode.window.showWarningMessage(`AI Handoff: ${message}`);
+        }
 
-    const destinations = await pickDestinations();
-    if (destinations.length === 0) {
-      return;
-    }
+        const destinations = await pickDestinations();
+        if (destinations.length === 0) {
+          return;
+        }
 
-    const messages = await dispatchHandoff(result.text, opts.format, destinations);
-    const summary =
-      `AI Handoff: ${result.stats.fileCount} files, ` +
-      `${formatBytes(result.stats.totalSizeBytes)}, ` +
-      `~${formatTokenCount(result.stats.estimatedTokens)} tokens. ` +
-      messages.join('. ');
-    vscode.window.showInformationMessage(summary);
-
-    session.lastSkipped = result.skipped.map((s) => ({
-      relativePath: s.relativePath,
-      reason: s.reason,
-      detail: s.detail,
-    }));
-    panel.updateState({
-      stats: formatStatsForPanel(result.stats) as never,
-      skipped: session.lastSkipped,
-    });
-  } catch (e) {
-    panel.showError((e as Error).message);
-    vscode.window.showErrorMessage(`AI Handoff: ${(e as Error).message}`);
-  } finally {
-    panel.setBusy(false);
-  }
-}
-
-/**
- * Generate the handoff for the sidebar tree selection and dispatch it.
- */
-async function runGenerate(
-  treeProvider: FileTreeProvider,
-  panel: ActionPanelProvider,
-  session: SessionState,
-  workspaceRoot: string | undefined,
-): Promise<void> {
-  if (!workspaceRoot) {
-    panel.showError('No workspace folder is open.');
-    return;
-  }
-
-  const selection = treeProvider.getSelection();
-  if (selection.length === 0) {
-    // Git diff is scoped to the current selection (see generateHandoff), so
-    // an empty selection can no longer produce a diff-only handoff either —
-    // there'd be nothing for the diff to match against.
-    panel.showError('Select at least one file before generating.');
-    return;
-  }
-
-  const selectedFiles: SelectedFile[] = selection
-    .map((rel) => {
-      const absolutePath = treeProvider.resolveAbsolutePath(rel);
-      return absolutePath ? { relativePath: rel, absolutePath } : undefined;
-    })
-    .filter((f): f is SelectedFile => f !== undefined);
-
-  await doGenerateAndDispatch(selectedFiles, panel, session, workspaceRoot);
+        const messages = await dispatchHandoff(result.text, opts.format, destinations);
+        const summary =
+          `AI Handoff: ${result.stats.fileCount} files, ` +
+          `${formatBytes(result.stats.totalSizeBytes)}, ` +
+          `~${formatTokenCount(result.stats.estimatedTokens)} tokens. ` +
+          messages.join('. ');
+        vscode.window.showInformationMessage(summary);
+      } catch (e) {
+        vscode.window.showErrorMessage(`AI Handoff: ${(e as Error).message}`);
+      }
+    },
+  );
 }
 
 /**

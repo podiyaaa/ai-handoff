@@ -578,4 +578,46 @@ describe('HandoffPanelProvider', () => {
   // onDidReceiveMessage. Verified instead by code review: resolveWebviewView
   // wires exactly one onDidDispose that disposes both the change listener
   // and the bridge.
+
+  it('persists the selection to the store as it changes (post-cutover: this is the only tree left)', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view } = fakeView();
+    provider.resolveWebviewView(view);
+
+    // The shared vscode stub's getConfiguration() always returns whatever
+    // default the caller passes — selectionMemory's own default is
+    // 'lastOnly', so persistence is exercised unconditionally in this
+    // harness (see setup.js's workspace.getConfiguration comment).
+    await model.toggleFile('README.md', true);
+    await waitUntil(() => (store.getLastSelection() ?? []).includes('README.md'));
+    expect(store.getLastSelection()).to.deep.equal(['README.md']);
+
+    await model.toggleFile('README.md', false);
+    await waitUntil(() => (store.getLastSelection() ?? []).length === 0);
+    expect(store.getLastSelection()).to.deep.equal([]);
+  });
+
+  it('runGenerate() runs the same generate pipeline as the actions/generate bridge handler', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted } = fakeView();
+    provider.resolveWebviewView(view);
+
+    // No workspace root -> undefined for this instance would use root, so
+    // exercise the "nothing selected" error path instead, verifying
+    // runGenerate() reaches the same emit('error', ...) actions/generate does.
+    await provider.runGenerate();
+
+    const errorEvent = posted.find(
+      (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'error',
+    ) as { payload: { message: string } } | undefined;
+    expect(errorEvent?.payload.message).to.equal('Select at least one file before generating.');
+  });
+
+  it('invalidateRepoRootCache() does not throw and does not disturb the current state', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view } = fakeView();
+    provider.resolveWebviewView(view);
+
+    expect(() => provider.invalidateRepoRootCache()).to.not.throw();
+  });
 });

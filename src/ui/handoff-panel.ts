@@ -37,14 +37,14 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { PanelBookmark, PanelState } from '../core/bridge-protocol';
 import { formatBytes } from '../core/filter';
+import { formatStatsForPanel } from '../core/formatter';
 import { parseSearchQuery } from '../core/search-filter';
 import { formatTokenCount } from '../core/token-estimator';
-import type { DiffScope, HandoffOptions, OutputFormat, SelectedFile } from '../core/types';
+import type { DiffScope, HandoffOptions, OutputFormat, SelectedFile, SelectionMemoryMode } from '../core/types';
 import type { FileTreeModel } from '../services/file-tree-model';
 import { RepoRootCache } from '../services/git-diff-reader';
 import { generateHandoff } from '../services/handoff-generator';
 import type { SelectionStore } from '../services/selection-store';
-import { formatStatsForPanel } from './action-panel';
 import { dispatchHandoff, pickDestinations } from './output-picker';
 import { HostBridge } from './webview-host-bridge';
 import { generateNonce } from './webview-nonce';
@@ -105,11 +105,17 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     const changeListener = this.model.onDidChangeTree(() => {
       bridge.emit('tree/invalidated', { path: undefined });
     });
-    // Refresh stats whenever selection changes — mirrors the old
-    // treeProvider.onDidChangeSelection -> refreshPanel wiring, minus the
-    // store.setLastSelection() persistence (deliberately not done yet, see
-    // extension.ts's "starts empty on every launch" decision).
-    const selectionListener = this.model.onDidChangeSelection(() => {
+    // Refresh stats whenever selection changes, and persist it as the "last
+    // selection" for next launch — mirrors the old
+    // treeProvider.onDidChangeSelection -> refreshPanel wiring, now including
+    // the store.setLastSelection() persistence that was deliberately deferred
+    // until this provider became the only one left (see extension.ts's
+    // initialSelection computation, now wired into this provider's model too).
+    const selectionListener = this.model.onDidChangeSelection((selected) => {
+      const memoryMode = this.getConfig<SelectionMemoryMode>('selectionMemory', 'lastOnly');
+      if (memoryMode === 'lastOnly' || memoryMode === 'both') {
+        void this.store.setLastSelection(selected);
+      }
       void this.pushState();
     });
     // Ticking one specific file's checkbox is a deliberate "include this
@@ -318,6 +324,28 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   }
 
   // -- Generate ---------------------------------------------------------------
+
+  /**
+   * Exposed for the `aiHandoff.generateFromPanel` command-palette entry —
+   * generates using the tree's current selection and this provider's own
+   * live settings (format/diff/overrides), the same as clicking the
+   * webview's own Generate button. Kept as a thin public wrapper rather
+   * than making `generate()` itself public, so the class's intentional
+   * surface (bridge handlers in, nothing else out) stays clear.
+   */
+  async runGenerate(): Promise<void> {
+    await this.generate();
+  }
+
+  /**
+   * Repo layouts rarely change mid-session, so git diff's nested-repo
+   * discovery is cached — exposed for the `aiHandoff.refreshTree` command,
+   * the manual escape hatch for the rare case a repo got added/moved/
+   * removed since the cache was built.
+   */
+  invalidateRepoRootCache(): void {
+    this.repoRootCache.invalidate();
+  }
 
   private async generate(): Promise<void> {
     if (!this.workspaceRoot) {
