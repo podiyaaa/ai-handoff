@@ -144,6 +144,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     bridge.handle('tree/toggleDirectory', ({ path: relativePath, checked }) =>
       this.model.toggleDirectory(relativePath, checked),
     );
+    bridge.handle('tree/clearSelection', () => this.model.clearSelection());
     bridge.handle('tree/setSearchQuery', ({ text }) => {
       // On an invalid query (e.g. an unterminated regex while still
       // typing), surface the error and leave the last valid filter in
@@ -482,6 +483,33 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       flex: 0 0 auto;
       padding: 6px 12px;
     }
+    .search-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 4px;
+    }
+    .icon-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      color: var(--vscode-foreground);
+      opacity: 0.75;
+      cursor: pointer;
+      border-radius: 2px;
+    }
+    .icon-btn:hover {
+      opacity: 1;
+      background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+    }
+    .icon-btn:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
     .search-wrap {
       position: relative;
       display: flex;
@@ -738,6 +766,11 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
 <body>
   <div class="shell">
     <div class="search-header">
+      <div class="search-toolbar">
+        <button class="icon-btn" id="clear-selection" title="Unselect all" aria-label="Unselect all">
+          <span class="codicon">&#xEABF;</span>
+        </button>
+      </div>
       <div class="search-wrap">
         <input
           id="query"

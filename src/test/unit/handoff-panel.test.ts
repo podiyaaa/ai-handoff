@@ -131,6 +131,7 @@ describe('HandoffPanelProvider', () => {
     expect(view.webview.html).to.include('codicon.ttf');
     expect(view.webview.html).to.include('id="tree-scroll"');
     expect(view.webview.html).to.include('id="query"');
+    expect(view.webview.html).to.include('id="clear-selection"');
   });
 
   it('tree/setSearchQuery parses the query and applies it to the model', async () => {
@@ -223,6 +224,26 @@ describe('HandoffPanelProvider', () => {
     });
     await waitUntil(() => posted.length >= 1);
     expect(model.getSelection()).to.deep.equal(['src/index.ts']);
+  });
+
+  it('tree/clearSelection unselects every file and is reflected in the next getChildren call', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    await model.toggleFile('README.md', true);
+    await model.toggleDirectory('src', true);
+    expect(model.getSelection()).to.deep.equal(['README.md', 'src/index.ts']);
+
+    trigger({ kind: 'request', id: '1', method: 'tree/clearSelection', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    expect(model.getSelection()).to.deep.equal([]);
+    trigger({ kind: 'request', id: '2', method: 'tree/getChildren', params: { path: undefined } });
+    await waitUntil(() => Boolean(findResponse(posted, '2')));
+    const response = findResponse(posted, '2') as { result: Array<{ name: string; checkboxState: string }> };
+    const readme = response.result.find((r) => r.name === 'README.md')!;
+    expect(readme.checkboxState).to.equal('unchecked');
   });
 
   it('file/open resolves the relative path and opens it via vscode.open', async () => {

@@ -28,6 +28,7 @@
 
     var scrollEl = document.getElementById('tree-scroll');
     var spacerEl = document.getElementById('tree-spacer');
+    var clearSelectionBtn = document.getElementById('clear-selection');
 
     /** Flat, ordered TreeNodeInfo[] from the host — see FileTreeModel.getVisibleRows(). */
     var rows = [];
@@ -180,6 +181,12 @@
     // Pushed by the host when the file watcher invalidates something, or a
     // search query changes what should be visible.
     bridge.on('tree/invalidated', refetchAndRender);
+    // No local optimistic update needed here (unlike toggleExpand's icon
+    // flip) — clearSelection() fires onDidChangeTree host-side, which
+    // pushes tree/invalidated and lands us back in refetchAndRender anyway.
+    clearSelectionBtn.addEventListener('click', function () {
+      bridge.call('tree/clearSelection', undefined);
+    });
 
     refetchAndRender();
   }
