@@ -5,6 +5,34 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-07-30 (pre-release)
+
+### Added
+
+- **Merged sidebar view** — the three separately-chromed views (Search, Files, Actions) are now a single "AI Handoff" view: search box, virtualized file tree, and the actions footer (format/diff/generate/instructions/bookmarks/skipped files) all in one place, reclaiming the vertical space VS Code wastes on a minimum height per stacked view. The file tree itself is a custom-rendered, windowed list — built to stay fast on very large projects (only what's actually visible is ever rendered, and only what's actually expanded is ever read from disk).
+- **Keyboard navigation for the file tree** — arrow keys move focus and scroll as needed, Home/End jump to the first/last visible row, Right/Left expand/collapse a directory, Enter opens a file (or expands/collapses a directory), Space toggles the focused row's checkbox. Full ARIA tree/treeitem semantics for screen readers.
+- **"Generate handoff from this file"** — right-click inside an editor, or right-click its tab, to generate a handoff from just that one file without touching the sidebar selection.
+- **"Generate handoff from selected lines"** — select some text in the editor, right-click, and generate a handoff containing just that excerpt (shown with its real line numbers, e.g. "lines 120-145", not renumbered from 1).
+- **"Show selected files only"** — a view-title toggle that filters the tree down to just what's currently selected (and its parent folders), useful for double-checking a large selection before generating.
+- **"Collapse all"** — a view-title button that collapses every expanded folder at once. No "Expand all" — expanding everything at once isn't safe on a huge project, since the tree is read lazily.
+- New setting `aiHandoff.searchExcludeDirs` — a comma-separated list of extra directory glob patterns (e.g. `vendor,coverage,**/generated`) to keep out of the sidebar search index, on top of the built-in defaults (`aiHandoff.searchSkipJunkDirs`).
+
+### Changed
+
+- **Selection persistence now applies to the merged view too** — `aiHandoff.selectionMemory` (auto-restoring your last selection) works the same way it always did, just against the new single view.
+- **"Unselect all" and "Refresh"** are now view-title icons next to the panel's title, alongside "Show selected only"/"Collapse all", instead of separate menu-only commands.
+- Plain-text sidebar search now matches the **file name only**, not the full path — searching "wo" no longer surfaces every file under a folder named `workspace`. `ext:`/`re:` search modes are unchanged and still match the full path.
+
+### Removed
+
+- The old three-view sidebar (native file tree, standalone search bar, standalone actions panel) is gone, replaced entirely by the merged view above.
+
+### Fixed
+
+- **Stats could lag behind the actual selection** after a rapid sequence of selecting/deselecting files or loading bookmarks — the displayed file count/size/token estimate could briefly (or persistently, until the next change) reflect an older selection than what the tree actually showed. Fixed by discarding stale, out-of-order background updates.
+- **Tree checkbox and expand-arrow theming** — checkboxes now use the theme's accent color instead of the browser default, and the focus ring around a checkbox only shows for keyboard navigation (Tab), not a mouse click. Expand/collapse arrows use real codicon glyphs instead of plain Unicode triangles.
+- **No workspace folder open** now shows an explanatory message in the tree area instead of silently rendering as blank.
+
 ## [0.3.1] — 2026-07-28 (pre-release)
 
 ### Added
