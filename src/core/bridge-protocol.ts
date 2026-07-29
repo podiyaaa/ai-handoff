@@ -84,6 +84,8 @@ export interface BridgeMethods {
   'tree/toggleExpand': { params: { path: string; expanded: boolean }; result: void };
   /** Unselects every file — the merged webview's replacement for the old "Clear selection" view/title icon. */
   'tree/clearSelection': { params: void; result: void };
+  /** Toggle the "show selected files only" display filter — never changes the selection itself. */
+  'tree/setShowSelectedOnly': { params: { enabled: boolean }; result: void };
   'tree/setSearchQuery': { params: { text: string }; result: { error: string | undefined } };
   /**
    * Called once by the webview on load. Returns the full current state

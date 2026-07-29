@@ -246,6 +246,87 @@ describe('FileTreeModel — search filter', () => {
   });
 });
 
+describe('FileTreeModel — show selected only', () => {
+  let root: string;
+  let model: FileTreeModel;
+
+  beforeEach(async () => {
+    root = await makeSearchRoot();
+    model = new FileTreeModel([fakeFolder(root, 0)]);
+  });
+  afterEach(async () => {
+    model.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('shows everything when the filter is off (the default)', async () => {
+    expect(await collectVisiblePaths(model)).to.have.lengthOf(10);
+  });
+
+  it('keeps only selected files and their ancestor directories', async () => {
+    await model.toggleFile('src/auth/login.ts', true);
+    model.setShowSelectedOnly(true);
+    expect(await collectVisiblePaths(model)).to.deep.equal(['src', 'src/auth', 'src/auth/login.ts'].sort());
+  });
+
+  it('with nothing selected, hides the whole tree', async () => {
+    model.setShowSelectedOnly(true);
+    expect(await collectVisiblePaths(model)).to.deep.equal([]);
+  });
+
+  it('is a display-only filter — turning it off restores the full tree, selection untouched', async () => {
+    await model.toggleFile('README.md', true);
+    model.setShowSelectedOnly(true);
+    model.setShowSelectedOnly(false);
+    expect(await collectVisiblePaths(model)).to.have.lengthOf(10);
+    expect(model.getSelection()).to.deep.equal(['README.md']);
+  });
+
+  it('reflects selection changes made while the filter is already active', async () => {
+    await model.toggleFile('README.md', true);
+    model.setShowSelectedOnly(true);
+    expect(await collectVisiblePaths(model)).to.deep.equal(['README.md']);
+
+    await model.toggleFile('src/index.ts', true);
+    expect(await collectVisiblePaths(model)).to.deep.equal(['README.md', 'src', 'src/index.ts'].sort());
+
+    await model.toggleFile('README.md', false);
+    expect(await collectVisiblePaths(model)).to.deep.equal(['src', 'src/index.ts'].sort());
+  });
+
+  it('toggling a whole directory selects all its descendants, all of which stay visible', async () => {
+    model.setShowSelectedOnly(true);
+    await model.toggleDirectory('src/auth', true);
+    expect(await collectVisiblePaths(model)).to.deep.equal(
+      ['src', 'src/auth', 'src/auth/login.ts', 'src/auth/login.test.ts'].sort(),
+    );
+  });
+
+  it('clearSelection() empties the filtered view too', async () => {
+    await model.toggleFile('README.md', true);
+    model.setShowSelectedOnly(true);
+    await model.clearSelection();
+    expect(await collectVisiblePaths(model)).to.deep.equal([]);
+  });
+
+  it('combines with an active search query (AND, not OR)', async () => {
+    await model.toggleFile('src/auth/login.ts', true);
+    await model.toggleFile('src/index.ts', true);
+    model.setShowSelectedOnly(true);
+    model.setSearchQuery(parseSearchQuery('login').query);
+    // Both files are selected, but only login.ts also matches the search —
+    // index.ts is selected yet not shown, since it fails the search half.
+    expect(await collectVisiblePaths(model)).to.deep.equal(['src', 'src/auth', 'src/auth/login.ts'].sort());
+  });
+
+  it('getVisibleRows() auto-expands every ancestor directory, with no manual expand needed', async () => {
+    await model.toggleFile('src/auth/login.ts', true);
+    model.setShowSelectedOnly(true);
+    const rows = await model.getVisibleRows();
+    expect(rows.map((r) => r.relativePath).sort()).to.deep.equal(['src', 'src/auth', 'src/auth/login.ts'].sort());
+  });
+});
+
 describe('FileTreeModel — getVisibleRows', () => {
   let root: string;
   let model: FileTreeModel;

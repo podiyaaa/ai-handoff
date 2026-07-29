@@ -132,6 +132,7 @@ describe('HandoffPanelProvider', () => {
     expect(view.webview.html).to.include('id="tree-scroll"');
     expect(view.webview.html).to.include('id="query"');
     expect(view.webview.html).to.include('id="clear-selection"');
+    expect(view.webview.html).to.include('id="show-selected-only"');
   });
 
   it('tree/setSearchQuery parses the query and applies it to the model', async () => {
@@ -244,6 +245,22 @@ describe('HandoffPanelProvider', () => {
     const response = findResponse(posted, '2') as { result: Array<{ name: string; checkboxState: string }> };
     const readme = response.result.find((r) => r.name === 'README.md')!;
     expect(readme.checkboxState).to.equal('unchecked');
+  });
+
+  it('tree/setShowSelectedOnly filters getChildren down to selected files and their ancestors', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    await model.toggleFile('src/index.ts', true);
+
+    trigger({ kind: 'request', id: '1', method: 'tree/setShowSelectedOnly', params: { enabled: true } });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    trigger({ kind: 'request', id: '2', method: 'tree/getChildren', params: { path: undefined } });
+    await waitUntil(() => Boolean(findResponse(posted, '2')));
+    const response = findResponse(posted, '2') as { result: Array<{ name: string }> };
+    expect(response.result.map((r) => r.name)).to.deep.equal(['src']); // README.md isn't selected, so it's hidden
   });
 
   it('file/open resolves the relative path and opens it via vscode.open', async () => {

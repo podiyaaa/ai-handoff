@@ -145,6 +145,9 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       this.model.toggleDirectory(relativePath, checked),
     );
     bridge.handle('tree/clearSelection', () => this.model.clearSelection());
+    bridge.handle('tree/setShowSelectedOnly', ({ enabled }) => {
+      this.model.setShowSelectedOnly(enabled);
+    });
     bridge.handle('tree/setSearchQuery', ({ text }) => {
       // On an invalid query (e.g. an unterminated regex while still
       // typing), surface the error and leave the last valid filter in
@@ -510,6 +513,14 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       outline: 1px solid var(--vscode-focusBorder);
       outline-offset: -1px;
     }
+    /* Matches VS Code's own toggle buttons (e.g. search's "Match Case") —
+       a highlighted background/border while active/pressed. */
+    .icon-btn[aria-pressed="true"] {
+      opacity: 1;
+      background: var(--vscode-inputOption-activeBackground, rgba(128, 128, 128, 0.3));
+      border: 1px solid var(--vscode-inputOption-activeBorder, transparent);
+      color: var(--vscode-inputOption-activeForeground, var(--vscode-foreground));
+    }
     .search-wrap {
       position: relative;
       display: flex;
@@ -767,6 +778,15 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   <div class="shell">
     <div class="search-header">
       <div class="search-toolbar">
+        <button
+          class="icon-btn"
+          id="show-selected-only"
+          title="Show selected files only"
+          aria-label="Show selected files only"
+          aria-pressed="false"
+        >
+          <span class="codicon">&#xEB85;</span>
+        </button>
         <button class="icon-btn" id="clear-selection" title="Unselect all" aria-label="Unselect all">
           <span class="codicon">&#xEABF;</span>
         </button>

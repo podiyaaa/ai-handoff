@@ -122,6 +122,17 @@ export class FileTreeModel implements vscode.Disposable {
    */
   private searchQuery: ParsedSearchQuery | undefined;
 
+  /**
+   * "Show selected files only" — another *display* filter, same
+   * non-destructive contract as `searchQuery`: toggling it never changes
+   * `selected`, just what's rendered. Unlike the search index, no disk walk
+   * is ever needed to know which directories to keep — `selected` already
+   * holds every selected path in memory, so ancestor directories are
+   * derived directly from it (see `recomputeSelectedAncestors`).
+   */
+  private showSelectedOnly = false;
+  private selectedAncestorDirs: Set<string> | undefined;
+
   // -- Background search index --------------------------------------------
   private searchIndex: SearchIndexEntry[] | undefined;
   private indexMatchedFiles: Set<string> | undefined;
@@ -184,7 +195,8 @@ export class FileTreeModel implements vscode.Disposable {
       entries = await this.readDirEntries(ctx.absolutePath, ctx.folderRoot, ctx.folderName);
     }
 
-    const filtered = await this.applySearchFilter(entries);
+    const searchFiltered = await this.applySearchFilter(entries);
+    const filtered = this.applySelectionFilter(searchFiltered);
     return filtered.map((e) => this.toTreeNodeInfo(e));
   }
 
@@ -203,15 +215,19 @@ export class FileTreeModel implements vscode.Disposable {
     const children = await this.getChildren(relativePath);
     for (const child of children) {
       out.push(child);
-      // While a search is active, every directory getChildren() returns is
-      // already guaranteed to be an ancestor of a match (applySearchFilter
-      // excludes anything else) — so treat all of them as expanded for
-      // rendering, regardless of the user's actual manual expand/collapse
-      // state, exactly like the old FileTreeProvider's search-active default
-      // did. Deliberately doesn't mutate `expandedPaths` itself: clearing
-      // the search later reverts to whatever the user had actually expanded
-      // before searching, untouched.
-      if (child.isDirectory && (this.searchQuery || this.expandedPaths.has(child.relativePath))) {
+      // While a search or "show selected only" filter is active, every
+      // directory getChildren() returns is already guaranteed to be an
+      // ancestor of a match/selection (applySearchFilter/
+      // applySelectionFilter exclude anything else) — so treat all of them
+      // as expanded for rendering, regardless of the user's actual manual
+      // expand/collapse state, exactly like the old FileTreeProvider's
+      // search-active default did. Deliberately doesn't mutate
+      // `expandedPaths` itself: clearing the filter later reverts to
+      // whatever the user had actually expanded before, untouched.
+      if (
+        child.isDirectory &&
+        (this.searchQuery || this.showSelectedOnly || this.expandedPaths.has(child.relativePath))
+      ) {
         await this.collectVisibleRows(child.relativePath, out);
       }
     }
@@ -404,6 +420,61 @@ export class FileTreeModel implements vscode.Disposable {
     return false;
   }
 
+  // -- Show-selected-only filter -------------------------------------------
+
+  /** Toggle the "show selected files only" display filter. Never changes `selected` itself. */
+  setShowSelectedOnly(value: boolean): void {
+    this.showSelectedOnly = value;
+    this.recomputeSelectedAncestors();
+    this._onDidChangeTree.fire();
+  }
+
+  getShowSelectedOnly(): boolean {
+    return this.showSelectedOnly;
+  }
+
+  /**
+   * Derive every ancestor directory of every selected path, straight from
+   * `selected` — no disk walk needed (unlike the search index's
+   * `matchedAncestorDirs`), since the full set of selected paths is already
+   * known in memory. Recomputed whenever the filter is active and the
+   * selection changes, mirroring `recomputeIndexMatches`'s "only pay for
+   * this once per change, not once per row" shape.
+   */
+  private recomputeSelectedAncestors(): void {
+    if (!this.showSelectedOnly) {
+      this.selectedAncestorDirs = undefined;
+      return;
+    }
+    const dirs = new Set<string>();
+    for (const p of this.selected) {
+      const parts = p.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        dirs.add(parts.slice(0, i).join('/'));
+      }
+    }
+    this.selectedAncestorDirs = dirs;
+  }
+
+  /**
+   * Filter a level's raw entries down to just what's selected (or an
+   * ancestor of something selected), when the filter is active. Files must
+   * be selected directly; directories are kept if they're an ancestor of a
+   * selected file, or (rare — e.g. added via Explorer right-click on a
+   * folder) selected themselves.
+   */
+  private applySelectionFilter(entries: RawEntry[]): RawEntry[] {
+    if (!this.showSelectedOnly) {
+      return entries;
+    }
+    const ancestorDirs = this.selectedAncestorDirs ?? new Set<string>();
+    return entries.filter((entry) =>
+      entry.isDirectory
+        ? ancestorDirs.has(entry.relativePath) || this.selected.has(entry.relativePath)
+        : this.selected.has(entry.relativePath),
+    );
+  }
+
   // -- Selection ---------------------------------------------------------
 
   getSelection(): string[] {
@@ -417,6 +488,7 @@ export class FileTreeModel implements vscode.Disposable {
   async setSelection(paths: string[]): Promise<void> {
     this.selected = new Set(paths);
     this.checkedDirs = new Set();
+    this.recomputeSelectedAncestors();
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire(this.getSelection());
   }
@@ -427,6 +499,7 @@ export class FileTreeModel implements vscode.Disposable {
     }
     this.selected.clear();
     this.checkedDirs.clear();
+    this.recomputeSelectedAncestors();
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire([]);
   }
@@ -443,6 +516,7 @@ export class FileTreeModel implements vscode.Disposable {
       this.selected.delete(relativePath);
       this.removeAncestorDirs(relativePath);
     }
+    this.recomputeSelectedAncestors();
     this._onDidToggleIndividualFile.fire({ relativePath, checked });
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire(this.getSelection());
@@ -471,6 +545,7 @@ export class FileTreeModel implements vscode.Disposable {
         this.selected.delete(this.toRelative(f, ctx.folderRoot, ctx.folderName));
       }
     }
+    this.recomputeSelectedAncestors();
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire(this.getSelection());
   }

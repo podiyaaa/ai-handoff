@@ -29,6 +29,7 @@
     var scrollEl = document.getElementById('tree-scroll');
     var spacerEl = document.getElementById('tree-spacer');
     var clearSelectionBtn = document.getElementById('clear-selection');
+    var showSelectedOnlyBtn = document.getElementById('show-selected-only');
 
     /** Flat, ordered TreeNodeInfo[] from the host — see FileTreeModel.getVisibleRows(). */
     var rows = [];
@@ -186,6 +187,15 @@
     // pushes tree/invalidated and lands us back in refetchAndRender anyway.
     clearSelectionBtn.addEventListener('click', function () {
       bridge.call('tree/clearSelection', undefined);
+    });
+
+    // Starts unpressed on every load — same "resets on launch" convention
+    // as the selection itself; nothing here needs restoring from state.
+    var showSelectedOnly = false;
+    showSelectedOnlyBtn.addEventListener('click', function () {
+      showSelectedOnly = !showSelectedOnly;
+      showSelectedOnlyBtn.setAttribute('aria-pressed', String(showSelectedOnly));
+      bridge.call('tree/setShowSelectedOnly', { enabled: showSelectedOnly }).then(refetchAndRender);
     });
 
     refetchAndRender();
