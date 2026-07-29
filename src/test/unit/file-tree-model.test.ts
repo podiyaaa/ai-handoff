@@ -289,13 +289,28 @@ describe('FileTreeModel — getVisibleRows', () => {
     expect(rows.map((r) => r.relativePath)).to.not.include('src/index.ts');
   });
 
-  it('respects an active search filter, same as getChildren', async () => {
-    model.setExpanded('src', true);
+  it('an active search filter auto-expands every returned directory, with no manual expand needed at all', async () => {
+    // Nothing manually expanded — search alone should still surface the
+    // full match chain, matching the old FileTreeProvider's "expanded by
+    // default while a search is active" behavior.
     model.setSearchQuery(parseSearchQuery('login').query);
     const rows = await model.getVisibleRows();
     expect(rows.map((r) => r.relativePath).sort()).to.deep.equal(
-      ['src', 'src/auth'].sort(), // 'src/auth' itself isn't expanded, so its matching children don't show yet
+      ['src', 'src/auth', 'src/auth/login.ts', 'src/auth/login.test.ts'].sort(),
     );
+  });
+
+  it('clearing the search reverts to whatever was actually manually expanded before searching', async () => {
+    model.setExpanded('src', true);
+    model.setSearchQuery(parseSearchQuery('login').query);
+    model.setSearchQuery(undefined);
+    const rows = await model.getVisibleRows();
+    // 'src' stays expanded (the user really did expand it) but 'src/auth'
+    // — only auto-expanded while the search was active — collapses back.
+    expect(rows.map((r) => r.relativePath).sort()).to.deep.equal(
+      ['README.md', 'docs', 'src', 'src/auth', 'src/index.ts', 'src/utils'].sort(),
+    );
+    expect(rows.map((r) => r.relativePath)).to.not.include('src/auth/login.ts');
   });
 });
 

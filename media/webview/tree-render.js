@@ -10,16 +10,18 @@
  * Navigation: clicking a directory row expands/collapses it. Selection: the
  * per-row checkbox calls tree/toggleFile or tree/toggleDirectory depending
  * on the row's isDirectory flag, matching FileTreeModel's own split API.
- * Search and the actions footer come in later stages, reusing this same
- * render loop.
+ * The actions footer comes in a later stage, reusing this same render loop.
+ *
+ * Takes an already-constructed `bridge` rather than calling
+ * acquireVsCodeApi()/createBridge() itself — acquireVsCodeApi() throws if
+ * called more than once per webview, and search-render.js needs the same
+ * bridge instance, so main.js constructs it once and passes it to both.
  */
 (function () {
   var ROW_HEIGHT = 22; // matches VS Code's own tree row height
   var OVERSCAN = 8;
 
-  function init() {
-    var vscodeApi = acquireVsCodeApi();
-    var bridge = window.AiHandoffBridge.createBridge(vscodeApi);
+  function init(bridge) {
     var VirtualList = window.AiHandoffVirtualList;
 
     var scrollEl = document.getElementById('tree-scroll');
@@ -175,9 +177,5 @@
     refetchAndRender();
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
+  window.AiHandoffTreeRender = { init: init };
 })();

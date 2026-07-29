@@ -7,24 +7,25 @@
  * a minimum resizable height per stacked view, wasting space the search
  * bar's single input row didn't need).
  *
- * Built up in stages (this is stage 3 of that rollout — see the project's
- * webview-merge plan): only the virtualized, read-only tree render is wired
- * up here, against real `FileTreeModel` data. No checkboxes, no search, no
- * actions footer content yet — those land in later stages, reusing this
- * same shell and render loop. Registered *alongside* the three old views
- * (not replacing them) until the final cutover stage.
+ * Built up in stages (see the project's webview-merge plan) — virtualized
+ * tree render, checkbox selection, and search are wired up so far, against
+ * real `FileTreeModel` data. The actions footer content still doesn't exist
+ * yet (empty placeholder) — that's the next stage, reusing this same shell.
+ * Registered *alongside* the three old views (not replacing them) until the
+ * final cutover stage.
  *
  * Framework-free, no build step — same convention as `action-panel.ts`/
  * `search-bar-panel.ts`, just with the webview's JS split into external
  * files under `media/webview/` (loaded via `asWebviewUri()`) instead of one
  * inline template literal, since this view's client-side code (bridge
- * client, virtualization math, tree rendering) is large enough that a
- * single inline string would hurt review/maintenance more than a few extra
- * files does.
+ * client, virtualization math, tree/search rendering) is large enough that
+ * a single inline string would hurt review/maintenance more than a few
+ * extra files does.
  */
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { parseSearchQuery } from '../core/search-filter';
 import type { FileTreeModel } from '../services/file-tree-model';
 import { HostBridge } from './webview-host-bridge';
 import { generateNonce } from './webview-nonce';
@@ -79,6 +80,17 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     });
     bridge.handle('tree/toggleFile', ({ path, checked }) => this.model.toggleFile(path, checked));
     bridge.handle('tree/toggleDirectory', ({ path, checked }) => this.model.toggleDirectory(path, checked));
+    bridge.handle('tree/setSearchQuery', ({ text }) => {
+      // On an invalid query (e.g. an unterminated regex while still
+      // typing), surface the error and leave the last valid filter in
+      // place, rather than clearing the model's query on every keystroke —
+      // same behavior as the old search-bar-panel.ts wiring.
+      const { query, error } = parseSearchQuery(text);
+      if (!error) {
+        this.model.setSearchQuery(query);
+      }
+      return { error };
+    });
   }
 
   private renderHtml(webview: vscode.Webview): string {
@@ -131,11 +143,68 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       flex-direction: column;
       height: 100%;
     }
-    /* Placeholder rows — search (stage 5) and actions (stage 6) fill these in later. */
-    .search-header-placeholder,
+    /* Actions footer placeholder — stage 6 fills this in. */
     .actions-footer-placeholder {
       flex: 0 0 auto;
     }
+    .search-header {
+      flex: 0 0 auto;
+      padding: 6px 12px;
+    }
+    .search-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .search-wrap input {
+      width: 100%;
+      padding: 4px 24px 4px 6px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+    }
+    .search-wrap input:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+    .search-wrap input.invalid {
+      border-color: var(--vscode-inputValidation-errorBorder);
+    }
+    .search-wrap button.clear {
+      position: absolute;
+      right: 3px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      color: var(--vscode-foreground);
+      opacity: 0.6;
+      cursor: pointer;
+      border-radius: 2px;
+      font-size: 12px;
+      line-height: 1;
+    }
+    .search-wrap button.clear:hover {
+      opacity: 1;
+      background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+    }
+    .search-header .hint,
+    .search-header .error {
+      margin-top: 4px;
+      font-size: 0.85em;
+    }
+    .search-header .hint { opacity: 0.6; }
+    .search-header .error { color: var(--vscode-inputValidation-errorForeground, var(--vscode-errorForeground)); }
+    .hidden { display: none !important; }
     #tree-scroll {
       flex: 1 1 auto;
       overflow-y: auto;
@@ -191,7 +260,19 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div class="shell">
-    <div class="search-header-placeholder"></div>
+    <div class="search-header">
+      <div class="search-wrap">
+        <input
+          id="query"
+          type="text"
+          placeholder="Search files… (ext:ts,tsx · re:^use[A-Z])"
+          aria-label="Search files"
+        />
+        <button class="clear hidden" id="clear" title="Clear search" aria-label="Clear search">&#x2715;</button>
+      </div>
+      <div class="hint hidden" id="hint">Plain text matches the path — or try "ext:ts,tsx" / "re:^use[A-Z]".</div>
+      <div class="error hidden" id="error"></div>
+    </div>
     <div id="tree-scroll">
       <div id="tree-spacer"></div>
     </div>
@@ -201,6 +282,8 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}" src="${mediaUri('bridge-client.js')}"></script>
   <script nonce="${nonce}" src="${mediaUri('virtual-list.js')}"></script>
   <script nonce="${nonce}" src="${mediaUri('tree-render.js')}"></script>
+  <script nonce="${nonce}" src="${mediaUri('search-render.js')}"></script>
+  <script nonce="${nonce}" src="${mediaUri('main.js')}"></script>
 </body>
 </html>`;
   }

@@ -203,7 +203,15 @@ export class FileTreeModel implements vscode.Disposable {
     const children = await this.getChildren(relativePath);
     for (const child of children) {
       out.push(child);
-      if (child.isDirectory && this.expandedPaths.has(child.relativePath)) {
+      // While a search is active, every directory getChildren() returns is
+      // already guaranteed to be an ancestor of a match (applySearchFilter
+      // excludes anything else) — so treat all of them as expanded for
+      // rendering, regardless of the user's actual manual expand/collapse
+      // state, exactly like the old FileTreeProvider's search-active default
+      // did. Deliberately doesn't mutate `expandedPaths` itself: clearing
+      // the search later reverts to whatever the user had actually expanded
+      // before searching, untouched.
+      if (child.isDirectory && (this.searchQuery || this.expandedPaths.has(child.relativePath))) {
         await this.collectVisibleRows(child.relativePath, out);
       }
     }

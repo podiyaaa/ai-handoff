@@ -122,8 +122,39 @@ describe('HandoffPanelProvider', () => {
     expect(view.webview.html).to.include('bridge-client.js');
     expect(view.webview.html).to.include('virtual-list.js');
     expect(view.webview.html).to.include('tree-render.js');
+    expect(view.webview.html).to.include('search-render.js');
+    expect(view.webview.html).to.include('main.js');
     expect(view.webview.html).to.include('codicon.ttf');
     expect(view.webview.html).to.include('id="tree-scroll"');
+    expect(view.webview.html).to.include('id="query"');
+  });
+
+  it('tree/setSearchQuery parses the query and applies it to the model', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'tree/setSearchQuery', params: { text: 'index' } });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    const response = findResponse(posted, '1') as { result: { error: string | undefined } };
+    expect(response.result.error).to.be.undefined;
+
+    const children = await model.getChildren(undefined);
+    expect(children.map((c) => c.relativePath)).to.deep.equal(['src']); // README.md doesn't match "index"
+  });
+
+  it('tree/setSearchQuery surfaces a parse error without changing the model\'s query', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'tree/setSearchQuery', params: { text: 're:(' } });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    const response = findResponse(posted, '1') as { result: { error: string | undefined } };
+    expect(response.result.error).to.be.a('string');
+    expect(model.getSearchQuery()).to.be.undefined;
   });
 
   it('tree/getChildren delegates to the model', async () => {
