@@ -22,6 +22,7 @@ import type {
   HandoffOptions,
   HandoffResult,
   IncludedFile,
+  LineRange,
   SelectedFile,
   SkippedFile,
 } from '../core/types';
@@ -49,7 +50,11 @@ async function expandToFiles(selected: SelectedFile[]): Promise<SelectedFile[]> 
   const seen = new Set<string>();
   const out: SelectedFile[] = [];
 
-  async function processPath(relativePath: string, absolutePath: string): Promise<void> {
+  async function processPath(
+    relativePath: string,
+    absolutePath: string,
+    lineRange: LineRange | undefined,
+  ): Promise<void> {
     if (seen.has(relativePath)) {
       return;
     }
@@ -59,7 +64,7 @@ async function expandToFiles(selected: SelectedFile[]): Promise<SelectedFile[]> 
     } catch {
       // Stat failed — pass through to the main loop which will record the error.
       seen.add(relativePath);
-      out.push({ relativePath, absolutePath });
+      out.push({ relativePath, absolutePath, lineRange });
       return;
     }
     if (stat.isDirectory()) {
@@ -76,17 +81,19 @@ async function expandToFiles(selected: SelectedFile[]): Promise<SelectedFile[]> 
         // Build child relative path from parent's relative path so this works
         // correctly for files from any workspace folder, not just the primary one.
         const childRel = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-        await processPath(childRel, childAbs);
+        // lineRange never applies to a directory's expanded children — it's
+        // only meaningful for the single file it was actually captured on.
+        await processPath(childRel, childAbs, undefined);
       }
     } else if (stat.isFile()) {
       seen.add(relativePath);
-      out.push({ relativePath, absolutePath });
+      out.push({ relativePath, absolutePath, lineRange });
     }
     // Symlinks to neither file nor dir are silently dropped.
   }
 
   for (const sel of selected) {
-    await processPath(sel.relativePath, sel.absolutePath);
+    await processPath(sel.relativePath, sel.absolutePath, sel.lineRange);
   }
   return out;
 }

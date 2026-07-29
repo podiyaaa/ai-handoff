@@ -31,6 +31,7 @@ describe('Commands are registered', () => {
   const expected = [
     'aiHandoff.generateFromExplorer',
     'aiHandoff.generateFromEditor',
+    'aiHandoff.generateFromSelection',
     'aiHandoff.generateFromPanel',
     'aiHandoff.refreshTree',
     'aiHandoff.clearSelection',

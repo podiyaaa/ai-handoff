@@ -56,12 +56,24 @@ export interface GitDiffResult {
   errorDetail?: string;
 }
 
+/**
+ * A 1-indexed, inclusive line range within a file — e.g. `{ start: 10, end: 25 }`
+ * covers lines 10 through 25. Used for "generate from the active editor
+ * selection" rather than the whole file.
+ */
+export interface LineRange {
+  start: number;
+  end: number;
+}
+
 /** A single file that the user wants to include in the handoff. */
 export interface SelectedFile {
   /** Path relative to the workspace root, using POSIX separators. */
   relativePath: string;
   /** Absolute path on disk. */
   absolutePath: string;
+  /** When set, only these lines are read/included instead of the whole file. */
+  lineRange?: LineRange;
 }
 
 /** A file that made it through filtering and is ready to format. */
@@ -72,8 +84,10 @@ export interface IncludedFile {
   content: string | null;
   /** True if treated as binary (placeholder only, no content). */
   isBinary: boolean;
-  /** File size in bytes. */
+  /** File size in bytes — of the sliced content when `lineRange` is set, not the whole file on disk. */
   sizeBytes: number;
+  /** Set when only a line range of the file was selected — see `SelectedFile.lineRange`. */
+  lineRange?: LineRange;
 }
 
 /** A file that was filtered out, with a reason and the path. */

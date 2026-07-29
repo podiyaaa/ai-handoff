@@ -8,12 +8,12 @@ import {
   formatDiffSection,
   formatDiffFile,
 } from '../../core/formatter';
-import type { DiffFileChange, GitDiffResult, IncludedFile, SkippedFile } from '../../core/types';
+import type { DiffFileChange, GitDiffResult, IncludedFile, LineRange, SkippedFile } from '../../core/types';
 
 function mkFile(
   relativePath: string,
   content: string | null,
-  opts: { isBinary?: boolean; sizeBytes?: number } = {},
+  opts: { isBinary?: boolean; sizeBytes?: number; lineRange?: LineRange } = {},
 ): IncludedFile {
   return {
     relativePath,
@@ -21,6 +21,7 @@ function mkFile(
     content,
     isBinary: opts.isBinary ?? false,
     sizeBytes: opts.sizeBytes ?? (content?.length ?? 0),
+    lineRange: opts.lineRange,
   };
 }
 
@@ -86,6 +87,17 @@ describe('applyLineNumbers', () => {
     const out = applyLineNumbers(input).split('\n');
     expect(out[0].startsWith('  1  ')).to.be.true;
     expect(out[99].startsWith('100  ')).to.be.true;
+  });
+
+  it('numbers from a custom start line, for a sliced excerpt of a larger file', () => {
+    expect(applyLineNumbers('a\nb\nc', 10)).to.equal('10  a\n11  b\n12  c');
+  });
+
+  it('right-aligns against the largest number reached, not the line count', () => {
+    // 3 lines starting at 98 reaches 100 — width should be 3, not 1.
+    const out = applyLineNumbers('a\nb\nc', 98).split('\n');
+    expect(out[0]).to.equal(' 98  a');
+    expect(out[2]).to.equal('100  c');
   });
 });
 
@@ -162,6 +174,24 @@ describe('formatHandoff — XML format', () => {
     );
     expect(out).to.include('1  a');
     expect(out).to.include('2  b');
+  });
+
+  it('adds a lines="" attribute for a line-ranged excerpt', () => {
+    const out = formatHandoff(
+      [mkFile('a.ts', 'const x = 1;', { lineRange: { start: 10, end: 12 } })],
+      { format: 'xml', includeLineNumbers: false },
+    );
+    expect(out).to.equal('<file path="a.ts" lines="10-12">\nconst x = 1;\n</file>');
+  });
+
+  it('numbers a line-ranged excerpt starting from its original line number, not 1', () => {
+    const out = formatHandoff(
+      [mkFile('a.ts', 'a\nb\nc', { lineRange: { start: 10, end: 12 } })],
+      { format: 'xml', includeLineNumbers: true },
+    );
+    expect(out).to.include('10  a');
+    expect(out).to.include('11  b');
+    expect(out).to.include('12  c');
   });
 
   it('sorts multiple files by path', () => {
@@ -285,6 +315,14 @@ describe('formatHandoff — Markdown format', () => {
     expect(out).to.include('_Binary file (24.0 KB) — content omitted._');
   });
 
+  it('notes the line range in the heading for a line-ranged excerpt', () => {
+    const out = formatHandoff(
+      [mkFile('src/index.ts', 'const x = 1;', { lineRange: { start: 10, end: 12 } })],
+      { format: 'markdown', includeLineNumbers: false },
+    );
+    expect(out).to.include('### `src/index.ts` (lines 10-12)');
+  });
+
   it('renders skipped files section with heading', () => {
     const skipped: SkippedFile[] = [
       {
@@ -330,6 +368,14 @@ describe('formatHandoff — plain format', () => {
     );
     expect(out).to.include('--- logo.png ---');
     expect(out).to.include('[binary file, 1.0 KB, content omitted]');
+  });
+
+  it('notes the line range in the separator for a line-ranged excerpt', () => {
+    const out = formatHandoff(
+      [mkFile('src/index.ts', 'const x = 1;', { lineRange: { start: 10, end: 12 } })],
+      { format: 'plain', includeLineNumbers: false },
+    );
+    expect(out).to.equal('--- src/index.ts (lines 10-12) ---\nconst x = 1;');
   });
 
   it('renders instructions plainly', () => {

@@ -94,19 +94,25 @@ export function formatFile(file: IncludedFile, options: FormatOptions): string {
     file.content === null
       ? ''
       : options.includeLineNumbers
-        ? applyLineNumbers(file.content)
+        ? applyLineNumbers(file.content, file.lineRange?.start ?? 1)
         : file.content;
 
+  // A line-ranged file is an excerpt, not the whole file — say so, so
+  // whoever reads the handoff (human or AI) doesn't mistake it for complete.
+  const rangeNote = file.lineRange ? ` (lines ${file.lineRange.start}-${file.lineRange.end})` : '';
+
   switch (options.format) {
-    case 'xml':
-      return `<file path="${escapeXmlAttr(file.relativePath)}">\n${content}\n</file>`;
+    case 'xml': {
+      const linesAttr = file.lineRange ? ` lines="${file.lineRange.start}-${file.lineRange.end}"` : '';
+      return `<file path="${escapeXmlAttr(file.relativePath)}"${linesAttr}>\n${content}\n</file>`;
+    }
     case 'markdown': {
       const lang = getLanguageForPath(file.relativePath);
       const fence = chooseFence(content);
-      return [`### \`${file.relativePath}\``, '', `${fence}${lang}`, content, fence].join('\n');
+      return [`### \`${file.relativePath}\`${rangeNote}`, '', `${fence}${lang}`, content, fence].join('\n');
     }
     case 'plain':
-      return `--- ${file.relativePath} ---\n${content}`;
+      return `--- ${file.relativePath}${rangeNote} ---\n${content}`;
   }
 }
 
@@ -219,13 +225,16 @@ export function formatDiffFile(file: DiffFileChange, format: OutputFormat): stri
 
 /**
  * Add line numbers to file content. Numbers are right-aligned to the width
- * of the largest line number for clean visual columns.
+ * of the largest line number for clean visual columns. `startLine` lets a
+ * sliced excerpt (see `IncludedFile.lineRange`) show the *original* file's
+ * line numbers instead of restarting at 1 — otherwise a snippet from lines
+ * 400-420 would confusingly display as lines 1-21.
  */
-export function applyLineNumbers(content: string): string {
+export function applyLineNumbers(content: string, startLine = 1): string {
   const lines = content.split('\n');
-  const width = String(lines.length).length;
+  const width = String(startLine + lines.length - 1).length;
   return lines
-    .map((line, idx) => `${String(idx + 1).padStart(width, ' ')}  ${line}`)
+    .map((line, idx) => `${String(startLine + idx).padStart(width, ' ')}  ${line}`)
     .join('\n');
 }
 

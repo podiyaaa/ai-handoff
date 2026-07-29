@@ -307,6 +307,20 @@ describe('generateHandoff — pipeline', () => {
       await fs.rm(rootB, { recursive: true, force: true });
     }
   });
+
+  it('a lineRange on the selection slices the included file down to just those lines', async () => {
+    const withRange: SelectedFile = {
+      ...sel(root, 'src/auth/login.ts'),
+      lineRange: { start: 1, end: 1 },
+    };
+    const result = await generateHandoff([withRange], baseOpts, root);
+    expect(result.included).to.have.lengthOf(1);
+    expect(result.included[0].content).to.equal('export const login = () => {};');
+    expect(result.included[0].lineRange).to.deep.equal({ start: 1, end: 1 });
+    expect(result.text).to.include('<file path="src/auth/login.ts" lines="1-1">');
+    // Stats reflect the sliced excerpt, not the whole file on disk.
+    expect(result.stats.totalSizeBytes).to.equal(result.included[0].content!.length);
+  });
 });
 
 // ---- Git diff integration ------------------------------------------------

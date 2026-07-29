@@ -85,6 +85,10 @@
         "title": "AI Handoff: Generate handoff from this file"
       },
       {
+        "command": "aiHandoff.generateFromSelection",
+        "title": "AI Handoff: Generate handoff from selected lines"
+      },
+      {
         "command": "aiHandoff.generateFromPanel",
         "title": "AI Handoff: Generate handoff",
         "icon": "$(rocket)"
@@ -123,6 +127,11 @@
         {
           "command": "aiHandoff.generateFromEditor",
           "group": "7_modification@99"
+        },
+        {
+          "command": "aiHandoff.generateFromSelection",
+          "when": "editorHasSelection",
+          "group": "7_modification@100"
         }
       ],
       "editor/title/context": [

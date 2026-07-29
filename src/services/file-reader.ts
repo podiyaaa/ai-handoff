@@ -117,14 +117,37 @@ export async function readFile(selected: SelectedFile): Promise<FileReadResult> 
   // Decode as UTF-8. Files that decode cleanly are treated as text;
   // anything weird stays mostly intact (the replacement character
   // U+FFFD will appear in malformed sequences, which is acceptable).
-  const content = buffer.toString('utf-8');
+  const fullContent = buffer.toString('utf-8');
+
+  if (selected.lineRange) {
+    const lines = fullContent.split('\n');
+    // Clamp defensively — the range came from an editor selection at the
+    // time it was captured, and the file could in principle have changed
+    // (or the range could be malformed) by the time this actually reads it.
+    const start = Math.max(1, Math.min(selected.lineRange.start, lines.length));
+    const end = Math.max(start, Math.min(selected.lineRange.end, lines.length));
+    const slicedContent = lines.slice(start - 1, end).join('\n');
+    return {
+      kind: 'text',
+      file: {
+        relativePath,
+        absolutePath,
+        content: slicedContent,
+        isBinary: false,
+        // Reflects the sliced content actually included, not the whole
+        // file's on-disk size — this is what stats/limits should count.
+        sizeBytes: Buffer.byteLength(slicedContent, 'utf-8'),
+        lineRange: { start, end },
+      },
+    };
+  }
 
   return {
     kind: 'text',
     file: {
       relativePath,
       absolutePath,
-      content,
+      content: fullContent,
       isBinary: false,
       sizeBytes,
     },

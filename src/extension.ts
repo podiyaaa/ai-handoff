@@ -381,6 +381,35 @@ export function activate(context: vscode.ExtensionContext): void {
       const root = workspaceRoot ?? files[0].absolutePath;
       await doGenerateAndDispatch(files, actionPanel, session, root);
     }),
+    vscode.commands.registerCommand('aiHandoff.generateFromSelection', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.selection.isEmpty) {
+        vscode.window.showWarningMessage('AI Handoff: no text selected.');
+        return;
+      }
+      const uri = editor.document.uri;
+      const absolutePath = uri.fsPath;
+      const folder = vscode.workspace.getWorkspaceFolder(uri);
+      if (!folder) {
+        vscode.window.showWarningMessage('AI Handoff: file is outside the workspace.');
+        return;
+      }
+      const relativePath = path.relative(folder.uri.fsPath, absolutePath).split(path.sep).join('/');
+
+      // VS Code selections are 0-indexed; convert to a 1-indexed inclusive
+      // line range. If the selection ends at column 0 of a later line (e.g.
+      // the user dragged from mid-line into the start of the next one),
+      // that next line isn't actually highlighted — don't count it.
+      const { selection } = editor;
+      let endLine = selection.end.line;
+      if (selection.end.character === 0 && endLine > selection.start.line) {
+        endLine -= 1;
+      }
+      const lineRange = { start: selection.start.line + 1, end: endLine + 1 };
+
+      const root = workspaceRoot ?? absolutePath;
+      await doGenerateAndDispatch([{ relativePath, absolutePath, lineRange }], actionPanel, session, root);
+    }),
     vscode.commands.registerCommand('aiHandoff.generateFromPanel', async () => {
       await runGenerate(treeProvider, actionPanel, session, workspaceRoot);
     }),
