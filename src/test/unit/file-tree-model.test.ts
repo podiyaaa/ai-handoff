@@ -370,6 +370,33 @@ describe('FileTreeModel — getVisibleRows', () => {
     expect(rows.map((r) => r.relativePath)).to.not.include('src/index.ts');
   });
 
+  it('collapseAll() collapses every expanded directory at once', async () => {
+    model.setExpanded('src', true);
+    model.setExpanded('src/auth', true);
+    model.setExpanded('docs', true);
+    model.collapseAll();
+    expect(model.isExpanded('src')).to.be.false;
+    expect(model.isExpanded('src/auth')).to.be.false;
+    expect(model.isExpanded('docs')).to.be.false;
+    const rows = await model.getVisibleRows();
+    expect(rows.map((r) => r.relativePath).sort()).to.deep.equal(['README.md', 'docs', 'src'].sort());
+  });
+
+  it('collapseAll() also turns off "show selected only" so the collapse actually takes visible effect', async () => {
+    await model.toggleFile('src/auth/login.ts', true);
+    model.setShowSelectedOnly(true);
+    expect(await collectVisiblePaths(model)).to.not.have.lengthOf(0);
+
+    model.collapseAll();
+
+    expect(model.getShowSelectedOnly()).to.be.false;
+    const rows = await model.getVisibleRows();
+    expect(rows.map((r) => r.relativePath).sort()).to.deep.equal(['README.md', 'docs', 'src'].sort());
+    // Still selected — collapseAll() is a display-only reset, same as the
+    // filter it just turned off.
+    expect(model.getSelection()).to.deep.equal(['src/auth/login.ts']);
+  });
+
   it('an active search filter auto-expands every returned directory, with no manual expand needed at all', async () => {
     // Nothing manually expanded — search alone should still surface the
     // full match chain, matching the old FileTreeProvider's "expanded by

@@ -30,6 +30,7 @@
     var spacerEl = document.getElementById('tree-spacer');
     var clearSelectionBtn = document.getElementById('clear-selection');
     var showSelectedOnlyBtn = document.getElementById('show-selected-only');
+    var collapseAllBtn = document.getElementById('collapse-all');
 
     /** Flat, ordered TreeNodeInfo[] from the host — see FileTreeModel.getVisibleRows(). */
     var rows = [];
@@ -196,6 +197,20 @@
       showSelectedOnly = !showSelectedOnly;
       showSelectedOnlyBtn.setAttribute('aria-pressed', String(showSelectedOnly));
       bridge.call('tree/setShowSelectedOnly', { enabled: showSelectedOnly }).then(refetchAndRender);
+    });
+
+    // No "expand all" counterpart, by design (see FileTreeModel.collapseAll's
+    // doc). collapseAll() also turns off "show selected only" host-side
+    // (that filter force-auto-expands every ancestor, so collapsing while
+    // it's still on would silently do nothing) — mirror that locally so the
+    // toggle button's pressed state doesn't lie about what's actually on.
+    collapseAllBtn.addEventListener('click', function () {
+      expandedCache = Object.create(null);
+      if (showSelectedOnly) {
+        showSelectedOnly = false;
+        showSelectedOnlyBtn.setAttribute('aria-pressed', 'false');
+      }
+      bridge.call('tree/collapseAll', undefined).then(refetchAndRender);
     });
 
     refetchAndRender();

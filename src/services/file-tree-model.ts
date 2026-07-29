@@ -247,6 +247,33 @@ export class FileTreeModel implements vscode.Disposable {
   }
 
   /**
+   * Collapse every currently-expanded directory back to the top level.
+   * Deliberately no "expand all" counterpart — see the module doc on why
+   * that was removed from the old `FileTreeProvider`: forcing a lazy-load
+   * of every directory at once is the exact "million files" regression this
+   * rewrite exists to avoid.
+   *
+   * Also turns off "show selected only" if it's active: that filter
+   * force-auto-expands every ancestor of a selected file (`collectVisibleRows`,
+   * same as an active search query), so collapsing while it's still on would
+   * silently have no visible effect — resetting it here means the button
+   * actually does what it says.
+   */
+  collapseAll(): void {
+    const hadExpanded = this.expandedPaths.size > 0;
+    const hadShowSelectedOnly = this.showSelectedOnly;
+    if (!hadExpanded && !hadShowSelectedOnly) {
+      return;
+    }
+    this.expandedPaths.clear();
+    if (hadShowSelectedOnly) {
+      this.showSelectedOnly = false;
+      this.selectedAncestorDirs = undefined;
+    }
+    this._onDidChangeTree.fire();
+  }
+
+  /**
    * Read a directory's entries, via the shared cache. Errors are never
    * cached (returns `[]` but doesn't remember it), so a transient failure
    * gets retried on the next call rather than sticking forever.

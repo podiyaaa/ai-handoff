@@ -133,6 +133,7 @@ describe('HandoffPanelProvider', () => {
     expect(view.webview.html).to.include('id="query"');
     expect(view.webview.html).to.include('id="clear-selection"');
     expect(view.webview.html).to.include('id="show-selected-only"');
+    expect(view.webview.html).to.include('id="collapse-all"');
   });
 
   it('tree/setSearchQuery parses the query and applies it to the model', async () => {
@@ -245,6 +246,27 @@ describe('HandoffPanelProvider', () => {
     const response = findResponse(posted, '2') as { result: Array<{ name: string; checkboxState: string }> };
     const readme = response.result.find((r) => r.name === 'README.md')!;
     expect(readme.checkboxState).to.equal('unchecked');
+  });
+
+  it('tree/collapseAll collapses every expanded directory, reflected in the next getVisibleRows call', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    model.setExpanded('src', true);
+    trigger({ kind: 'request', id: '1', method: 'tree/getVisibleRows', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+    expect((findResponse(posted, '1') as { result: Array<{ relativePath: string }> }).result.map((r) => r.relativePath)).to.include(
+      'src/index.ts',
+    );
+
+    trigger({ kind: 'request', id: '2', method: 'tree/collapseAll', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '2')));
+
+    trigger({ kind: 'request', id: '3', method: 'tree/getVisibleRows', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '3')));
+    const response = findResponse(posted, '3') as { result: Array<{ relativePath: string }> };
+    expect(response.result.map((r) => r.relativePath)).to.not.include('src/index.ts');
   });
 
   it('tree/setShowSelectedOnly filters getChildren down to selected files and their ancestors', async () => {

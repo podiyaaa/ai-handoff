@@ -82,6 +82,12 @@ export interface BridgeMethods {
   'tree/toggleFile': { params: { path: string; checked: boolean }; result: void };
   'tree/toggleDirectory': { params: { path: string; checked: boolean }; result: void };
   'tree/toggleExpand': { params: { path: string; expanded: boolean }; result: void };
+  /**
+   * Collapses every expanded directory (and turns off "show selected only"
+   * if active — see `FileTreeModel.collapseAll()`'s doc for why). No
+   * "expand all" counterpart exists, by design.
+   */
+  'tree/collapseAll': { params: void; result: void };
   /** Unselects every file — the merged webview's replacement for the old "Clear selection" view/title icon. */
   'tree/clearSelection': { params: void; result: void };
   /** Toggle the "show selected files only" display filter — never changes the selection itself. */

@@ -140,6 +140,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     bridge.handle('tree/toggleExpand', ({ path: relativePath, expanded }) => {
       this.model.setExpanded(relativePath, expanded);
     });
+    bridge.handle('tree/collapseAll', () => this.model.collapseAll());
     bridge.handle('tree/toggleFile', ({ path: relativePath, checked }) => this.model.toggleFile(relativePath, checked));
     bridge.handle('tree/toggleDirectory', ({ path: relativePath, checked }) =>
       this.model.toggleDirectory(relativePath, checked),
@@ -786,6 +787,9 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
           aria-pressed="false"
         >
           <span class="codicon">&#xEB85;</span>
+        </button>
+        <button class="icon-btn" id="collapse-all" title="Collapse all" aria-label="Collapse all">
+          <span class="codicon">&#xEAC5;</span>
         </button>
         <button class="icon-btn" id="clear-selection" title="Unselect all" aria-label="Unselect all">
           <span class="codicon">&#xEABF;</span>
