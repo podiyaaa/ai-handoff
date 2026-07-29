@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { WebviewView, WorkspaceFolder } from 'vscode';
 import { FileTreeModel } from '../../services/file-tree-model';
+import * as handoffGeneratorModule from '../../services/handoff-generator';
 import { InMemoryMemento, SelectionStore } from '../../services/selection-store';
 import { HandoffPanelProvider } from '../../ui/handoff-panel';
 
@@ -328,6 +329,47 @@ describe('HandoffPanelProvider', () => {
     await waitUntil(() => Boolean(findResponse(posted, '1')));
 
     expect(model.getSelection()).to.deep.equal(['README.md']);
+  });
+
+  it('discards a stale, slower pushState() result instead of overwriting a newer, faster one', async () => {
+    // Regression test for a real repro: toggling several files in quick
+    // succession fires onDidChangeSelection once per toggle, each of which
+    // kicks off its own async computeState() (real fs I/O via
+    // generateHandoff). Nothing guaranteed those resolve in call order, so
+    // an earlier, slower computation landing after a later, faster one
+    // could overwrite the newer (correct) stats with stale ones — the
+    // selection itself was right, but the fileCount/size/tokens panel
+    // lagged behind. Simulate that exact ordering deterministically by
+    // making the 1-file computation slow and the 2-file one fast.
+    const original = handoffGeneratorModule.generateHandoff;
+    (handoffGeneratorModule as unknown as { generateHandoff: typeof original }).generateHandoff = (async (
+      ...args: Parameters<typeof original>
+    ) => {
+      const selected = args[0];
+      if (selected.length === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      return original(...args);
+    }) as typeof original;
+
+    try {
+      const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+      const { view, posted } = fakeView();
+      provider.resolveWebviewView(view);
+
+      await model.toggleFile('README.md', true); // slow: 1 file, pushState #1
+      await model.toggleFile('src/index.ts', true); // fast: 2 files, pushState #2
+
+      await new Promise((resolve) => setTimeout(resolve, 80)); // let the slow one resolve too
+
+      const stateEvents = posted.filter(
+        (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'state',
+      ) as Array<{ payload: { stats: { fileCount: number } } }>;
+      expect(stateEvents).to.have.lengthOf(1);
+      expect(stateEvents[0].payload.stats.fileCount).to.equal(2);
+    } finally {
+      (handoffGeneratorModule as unknown as { generateHandoff: typeof original }).generateHandoff = original;
+    }
   });
 
   describe('actions/generate — error paths only', () => {

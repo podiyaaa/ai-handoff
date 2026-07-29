@@ -63,6 +63,14 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   private gitDiffEnabled: boolean;
   private diffScope: DiffScope;
   private readonly repoRootCache = new RepoRootCache();
+  // computeState() does real fs I/O, so pushState() calls triggered in quick
+  // succession (e.g. two toggleFile calls, or a toggle followed by a
+  // bookmark load) can resolve out of order. Each call captures the current
+  // generation and only emits if it's still the latest by the time its
+  // computeState() resolves — otherwise a stale, already-superseded result
+  // can land after a newer one and show the wrong stats for the actual
+  // current selection.
+  private stateGeneration = 0;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -284,7 +292,14 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async pushState(): Promise<void> {
+    const generation = ++this.stateGeneration;
     const state = await this.computeState();
+    if (generation !== this.stateGeneration) {
+      // A newer pushState() call was made while this one was still
+      // computing — its result is stale, discard it instead of overwriting
+      // the newer (still in-flight or already-emitted) state.
+      return;
+    }
     this.bridge?.emit('state', state);
   }
 
