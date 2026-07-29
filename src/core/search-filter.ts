@@ -10,7 +10,12 @@
  * Query syntax (a single string, e.g. typed into an input box):
  *   - `ext:ts,tsx`   — match by extension (comma-separated, leading dots optional)
  *   - `re:^use[A-Z]` — match by regex (case-insensitive) against the relative path
- *   - anything else  — case-insensitive substring match against the relative path
+ *     (deliberately path-based, not just the filename — anchoring a regex to
+ *     a directory, e.g. `re:^src/components/`, is a useful power-user case)
+ *   - anything else  — case-insensitive substring match against the file's
+ *     *name* only, not the full path — matching the path too made short
+ *     queries noisy (e.g. "wo" matching every file under a `workspace/`
+ *     folder regardless of the file's own name)
  */
 
 export type SearchMode = 'name' | 'extension' | 'regex';
@@ -73,8 +78,8 @@ export function parseSearchQuery(input: string): ParsedSearchResult {
 /**
  * Test whether a file matches a parsed query.
  *
- * @param relativePath POSIX-style path (used for name/regex matching).
- * @param name The file's base name (used for extension matching).
+ * @param relativePath POSIX-style path (used for regex matching).
+ * @param name The file's base name (used for name/extension matching).
  */
 export function matchesSearchQuery(
   relativePath: string,
@@ -90,6 +95,6 @@ export function matchesSearchQuery(
     case 'regex':
       return query.regex!.test(relativePath);
     case 'name':
-      return relativePath.toLowerCase().includes(query.raw.toLowerCase());
+      return name.toLowerCase().includes(query.raw.toLowerCase());
   }
 }
