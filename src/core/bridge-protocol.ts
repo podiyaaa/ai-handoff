@@ -82,16 +82,6 @@ export interface BridgeMethods {
   'tree/toggleFile': { params: { path: string; checked: boolean }; result: void };
   'tree/toggleDirectory': { params: { path: string; checked: boolean }; result: void };
   'tree/toggleExpand': { params: { path: string; expanded: boolean }; result: void };
-  /**
-   * Collapses every expanded directory (and turns off "show selected only"
-   * if active — see `FileTreeModel.collapseAll()`'s doc for why). No
-   * "expand all" counterpart exists, by design.
-   */
-  'tree/collapseAll': { params: void; result: void };
-  /** Unselects every file — the merged webview's replacement for the old "Clear selection" view/title icon. */
-  'tree/clearSelection': { params: void; result: void };
-  /** Toggle the "show selected files only" display filter — never changes the selection itself. */
-  'tree/setShowSelectedOnly': { params: { enabled: boolean }; result: void };
   'tree/setSearchQuery': { params: { text: string }; result: { error: string | undefined } };
   /**
    * Called once by the webview on load. Returns the full current state
@@ -108,13 +98,6 @@ export interface BridgeMethods {
   'actions/setDiffScope': { params: { scope: DiffScope }; result: void };
   'actions/generate': { params: void; result: void };
   'actions/overrideFile': { params: { path: string }; result: void };
-  /**
-   * Manual refresh — re-reads the tree from disk and invalidates the
-   * git-diff repo-root cache (repo layouts rarely change mid-session, so
-   * that discovery is normally memoized). Moved here from a native
-   * view/title icon once the merged webview grew its own toolbar/footer.
-   */
-  'actions/refresh': { params: void; result: void };
   'bookmarks/save': { params: void; result: void };
   'bookmarks/load': { params: { name: string }; result: void };
   'bookmarks/delete': { params: { name: string }; result: void };

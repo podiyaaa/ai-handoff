@@ -146,15 +146,10 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     bridge.handle('tree/toggleExpand', ({ path: relativePath, expanded }) => {
       this.model.setExpanded(relativePath, expanded);
     });
-    bridge.handle('tree/collapseAll', () => this.model.collapseAll());
     bridge.handle('tree/toggleFile', ({ path: relativePath, checked }) => this.model.toggleFile(relativePath, checked));
     bridge.handle('tree/toggleDirectory', ({ path: relativePath, checked }) =>
       this.model.toggleDirectory(relativePath, checked),
     );
-    bridge.handle('tree/clearSelection', () => this.model.clearSelection());
-    bridge.handle('tree/setShowSelectedOnly', ({ enabled }) => {
-      this.model.setShowSelectedOnly(enabled);
-    });
     bridge.handle('tree/setSearchQuery', ({ text }) => {
       // On an invalid query (e.g. an unterminated regex while still
       // typing), surface the error and leave the last valid filter in
@@ -208,11 +203,6 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       await this.model.setSelection(Array.from(sel));
     });
     bridge.handle('actions/generate', () => this.generate());
-    bridge.handle('actions/refresh', () => {
-      this.model.refresh();
-      this.invalidateRepoRootCache();
-      void this.pushState();
-    });
 
     bridge.handle('bookmarks/save', () => this.saveBookmark());
     bridge.handle('bookmarks/load', ({ name }) => this.loadBookmark(name));
@@ -343,13 +333,17 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Repo layouts rarely change mid-session, so git diff's nested-repo
-   * discovery is cached — exposed for the `aiHandoff.refreshTree` command,
-   * the manual escape hatch for the rare case a repo got added/moved/
-   * removed since the cache was built.
+   * Re-reads the tree and invalidates the git-diff repo-root cache (repo
+   * layouts rarely change mid-session, so that discovery is normally
+   * memoized) — exposed for the `aiHandoff.refreshTree` command, the manual
+   * escape hatch for the rare case a repo got added/moved/removed since the
+   * cache was built. Also refreshes stats, since a manual refresh can
+   * surface files that weren't there when they were last computed.
    */
-  invalidateRepoRootCache(): void {
+  refresh(): void {
+    this.model.refresh();
     this.repoRootCache.invalidate();
+    void this.pushState();
   }
 
   private async generate(): Promise<void> {
@@ -519,41 +513,6 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     .search-header {
       flex: 0 0 auto;
       padding: 6px 12px;
-    }
-    .search-toolbar {
-      display: flex;
-      justify-content: flex-end;
-      margin-bottom: 4px;
-    }
-    .icon-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 22px;
-      height: 22px;
-      padding: 0;
-      background: transparent;
-      border: none;
-      color: var(--vscode-foreground);
-      opacity: 0.75;
-      cursor: pointer;
-      border-radius: 2px;
-    }
-    .icon-btn:hover {
-      opacity: 1;
-      background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
-    }
-    .icon-btn:focus-visible {
-      outline: 1px solid var(--vscode-focusBorder);
-      outline-offset: -1px;
-    }
-    /* Matches VS Code's own toggle buttons (e.g. search's "Match Case") —
-       a highlighted background/border while active/pressed. */
-    .icon-btn[aria-pressed="true"] {
-      opacity: 1;
-      background: var(--vscode-inputOption-activeBackground, rgba(128, 128, 128, 0.3));
-      border: 1px solid var(--vscode-inputOption-activeBorder, transparent);
-      color: var(--vscode-inputOption-activeForeground, var(--vscode-foreground));
     }
     .search-wrap {
       position: relative;
@@ -818,26 +777,6 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
 <body>
   <div class="shell">
     <div class="search-header">
-      <div class="search-toolbar">
-        <button
-          class="icon-btn"
-          id="show-selected-only"
-          title="Show selected files only"
-          aria-label="Show selected files only"
-          aria-pressed="false"
-        >
-          <span class="codicon">&#xEB85;</span>
-        </button>
-        <button class="icon-btn" id="collapse-all" title="Collapse all" aria-label="Collapse all">
-          <span class="codicon">&#xEAC5;</span>
-        </button>
-        <button class="icon-btn" id="clear-selection" title="Unselect all" aria-label="Unselect all">
-          <span class="codicon">&#xEABF;</span>
-        </button>
-        <button class="icon-btn" id="refresh" title="Refresh" aria-label="Refresh">
-          <span class="codicon">&#xEB37;</span>
-        </button>
-      </div>
       <div class="search-wrap">
         <input
           id="query"

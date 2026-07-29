@@ -28,10 +28,6 @@
 
     var scrollEl = document.getElementById('tree-scroll');
     var spacerEl = document.getElementById('tree-spacer');
-    var clearSelectionBtn = document.getElementById('clear-selection');
-    var showSelectedOnlyBtn = document.getElementById('show-selected-only');
-    var collapseAllBtn = document.getElementById('collapse-all');
-    var refreshBtn = document.getElementById('refresh');
 
     /** Flat, ordered TreeNodeInfo[] from the host — see FileTreeModel.getVisibleRows(). */
     var rows = [];
@@ -53,6 +49,33 @@
 
     function depthOf(relativePath) {
       return relativePath.split('/').length - 1;
+    }
+
+    /**
+     * Rebuild expandedCache from a fresh rows array so the chevron icon
+     * never lies about a directory's real expand state. expandedCache
+     * started out as purely a client-side echo of this webview's own
+     * toggleExpand() clicks — fine while that was the only way expand
+     * state could change, but expand state can now also change from
+     * outside the webview entirely (e.g. the "Collapse all" view-title
+     * command, or a search query changing what's auto-expanded), which
+     * never touched expandedCache at all. Recomputing it from the
+     * authoritative rows array (a directory "is expanded" exactly when the
+     * very next row is one of its children) after every fetch keeps it
+     * truthful regardless of what caused the change, while still leaving
+     * toggleExpand()'s own optimistic instant-flip (set before this fetch
+     * even started) intact for the row that was just clicked.
+     */
+    function rebuildExpandedCacheFromRows(newRows) {
+      var next = Object.create(null);
+      for (var i = 0; i < newRows.length; i++) {
+        var data = newRows[i];
+        var child = newRows[i + 1];
+        if (data.isDirectory && child && child.relativePath.indexOf(data.relativePath + '/') === 0) {
+          next[data.relativePath] = true;
+        }
+      }
+      expandedCache = next;
     }
 
     function findRowIndexByPath(relativePath) {
@@ -224,6 +247,7 @@
     function refetchAndRender() {
       bridge.call('tree/getVisibleRows', undefined).then(function (newRows) {
         rows = newRows;
+        rebuildExpandedCacheFromRows(newRows);
         scheduleRender();
       });
     }
@@ -346,45 +370,15 @@
     // Delegated on the spacer (rows' shared parent) rather than per-row,
     // since virtualization recycles/removes row elements as the user scrolls.
     spacerEl.addEventListener('keydown', onTreeKeyDown);
-    // Pushed by the host when the file watcher invalidates something, or a
-    // search query changes what should be visible.
+    // Pushed by the host when the file watcher invalidates something, a
+    // search query changes what should be visible, or one of the native
+    // view/title commands ("Show selected only" / "Collapse all" /
+    // "Unselect all" / "Refresh" — see extension.ts) changes the model
+    // directly. There's nothing to wire for those four here — they're not
+    // webview buttons anymore, but onDidChangeTree fires host-side
+    // regardless of what triggered it, so this one listener covers them
+    // for free.
     bridge.on('tree/invalidated', refetchAndRender);
-    // No local optimistic update needed here (unlike toggleExpand's icon
-    // flip) — clearSelection() fires onDidChangeTree host-side, which
-    // pushes tree/invalidated and lands us back in refetchAndRender anyway.
-    clearSelectionBtn.addEventListener('click', function () {
-      bridge.call('tree/clearSelection', undefined);
-    });
-
-    // Starts unpressed on every load — same "resets on launch" convention
-    // as the selection itself; nothing here needs restoring from state.
-    var showSelectedOnly = false;
-    showSelectedOnlyBtn.addEventListener('click', function () {
-      showSelectedOnly = !showSelectedOnly;
-      showSelectedOnlyBtn.setAttribute('aria-pressed', String(showSelectedOnly));
-      bridge.call('tree/setShowSelectedOnly', { enabled: showSelectedOnly }).then(refetchAndRender);
-    });
-
-    // No "expand all" counterpart, by design (see FileTreeModel.collapseAll's
-    // doc). collapseAll() also turns off "show selected only" host-side
-    // (that filter force-auto-expands every ancestor, so collapsing while
-    // it's still on would silently do nothing) — mirror that locally so the
-    // toggle button's pressed state doesn't lie about what's actually on.
-    collapseAllBtn.addEventListener('click', function () {
-      expandedCache = Object.create(null);
-      if (showSelectedOnly) {
-        showSelectedOnly = false;
-        showSelectedOnlyBtn.setAttribute('aria-pressed', 'false');
-      }
-      bridge.call('tree/collapseAll', undefined).then(refetchAndRender);
-    });
-
-    // No .then(refetchAndRender) needed — actions/refresh's model.refresh()
-    // fires onDidChangeTree host-side, same as clearSelection above, which
-    // lands us back in refetchAndRender via the tree/invalidated listener.
-    refreshBtn.addEventListener('click', function () {
-      bridge.call('actions/refresh', undefined);
-    });
 
     refetchAndRender();
   }

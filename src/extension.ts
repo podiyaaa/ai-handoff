@@ -79,6 +79,25 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  // Mirrors FileTreeModel's "show selected only" state into a context key so
+  // the view/title menu can swap between the two showSelectedOnlyOn/Off
+  // icons — VS Code menu entries can't reflect a toggled/pressed state
+  // directly, only be shown/hidden via `when`. Reacts to onDidChangeTree
+  // (not a dedicated event) since collapseAll() can also turn this off
+  // internally (it force-auto-expands ancestors, so collapsing while it's
+  // still on would look like a no-op) — this keeps the icon in sync
+  // regardless of what actually changed the underlying state.
+  void vscode.commands.executeCommand('setContext', 'aiHandoff.showSelectedOnly', false);
+  context.subscriptions.push(
+    fileTreeModel.onDidChangeTree(() => {
+      void vscode.commands.executeCommand(
+        'setContext',
+        'aiHandoff.showSelectedOnly',
+        fileTreeModel.getShowSelectedOnly(),
+      );
+    }),
+  );
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('aiHandoff.searchSkipJunkDirs')) {
@@ -157,12 +176,20 @@ export function activate(context: vscode.ExtensionContext): void {
       await handoffPanel.runGenerate();
     }),
     vscode.commands.registerCommand('aiHandoff.refreshTree', () => {
-      fileTreeModel.refresh();
-      handoffPanel.invalidateRepoRootCache();
+      handoffPanel.refresh();
       adHocRepoRootCache.invalidate();
     }),
     vscode.commands.registerCommand('aiHandoff.clearSelection', async () => {
       await fileTreeModel.clearSelection();
+    }),
+    vscode.commands.registerCommand('aiHandoff.collapseAllTree', () => {
+      fileTreeModel.collapseAll();
+    }),
+    vscode.commands.registerCommand('aiHandoff.showSelectedOnlyOn', () => {
+      fileTreeModel.setShowSelectedOnly(true);
+    }),
+    vscode.commands.registerCommand('aiHandoff.showSelectedOnlyOff', () => {
+      fileTreeModel.setShowSelectedOnly(false);
     }),
     vscode.commands.registerCommand('aiHandoff.saveSelectionSet', async () => {
       const current = fileTreeModel.getSelection();

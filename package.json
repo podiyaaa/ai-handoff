@@ -85,6 +85,21 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "aiHandoff.collapseAllTree",
+        "title": "Collapse all",
+        "icon": "$(collapse-all)"
+      },
+      {
+        "command": "aiHandoff.showSelectedOnlyOn",
+        "title": "Show selected files only",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "aiHandoff.showSelectedOnlyOff",
+        "title": "Show all files",
+        "icon": "$(list-flat)"
+      },
+      {
         "command": "aiHandoff.saveSelectionSet",
         "title": "AI Handoff: Save current selection as set..."
       },
@@ -119,6 +134,33 @@
         {
           "command": "aiHandoff.generateFromEditor",
           "group": "7_modification@99"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "aiHandoff.showSelectedOnlyOn",
+          "when": "view == aiHandoff.mainView && !aiHandoff.showSelectedOnly",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiHandoff.showSelectedOnlyOff",
+          "when": "view == aiHandoff.mainView && aiHandoff.showSelectedOnly",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiHandoff.collapseAllTree",
+          "when": "view == aiHandoff.mainView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aiHandoff.clearSelection",
+          "when": "view == aiHandoff.mainView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "aiHandoff.refreshTree",
+          "when": "view == aiHandoff.mainView",
+          "group": "navigation@4"
         }
       ]
     },

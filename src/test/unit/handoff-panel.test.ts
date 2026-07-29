@@ -131,10 +131,6 @@ describe('HandoffPanelProvider', () => {
     expect(view.webview.html).to.include('codicon.ttf');
     expect(view.webview.html).to.include('id="tree-scroll"');
     expect(view.webview.html).to.include('id="query"');
-    expect(view.webview.html).to.include('id="clear-selection"');
-    expect(view.webview.html).to.include('id="show-selected-only"');
-    expect(view.webview.html).to.include('id="collapse-all"');
-    expect(view.webview.html).to.include('id="refresh"');
     expect(view.webview.html).to.include('role="tree"');
   });
 
@@ -228,63 +224,6 @@ describe('HandoffPanelProvider', () => {
     });
     await waitUntil(() => posted.length >= 1);
     expect(model.getSelection()).to.deep.equal(['src/index.ts']);
-  });
-
-  it('tree/clearSelection unselects every file and is reflected in the next getChildren call', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
-    const { view, posted, trigger } = fakeView();
-    provider.resolveWebviewView(view);
-
-    await model.toggleFile('README.md', true);
-    await model.toggleDirectory('src', true);
-    expect(model.getSelection()).to.deep.equal(['README.md', 'src/index.ts']);
-
-    trigger({ kind: 'request', id: '1', method: 'tree/clearSelection', params: undefined });
-    await waitUntil(() => Boolean(findResponse(posted, '1')));
-
-    expect(model.getSelection()).to.deep.equal([]);
-    trigger({ kind: 'request', id: '2', method: 'tree/getChildren', params: { path: undefined } });
-    await waitUntil(() => Boolean(findResponse(posted, '2')));
-    const response = findResponse(posted, '2') as { result: Array<{ name: string; checkboxState: string }> };
-    const readme = response.result.find((r) => r.name === 'README.md')!;
-    expect(readme.checkboxState).to.equal('unchecked');
-  });
-
-  it('tree/collapseAll collapses every expanded directory, reflected in the next getVisibleRows call', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
-    const { view, posted, trigger } = fakeView();
-    provider.resolveWebviewView(view);
-
-    model.setExpanded('src', true);
-    trigger({ kind: 'request', id: '1', method: 'tree/getVisibleRows', params: undefined });
-    await waitUntil(() => Boolean(findResponse(posted, '1')));
-    expect((findResponse(posted, '1') as { result: Array<{ relativePath: string }> }).result.map((r) => r.relativePath)).to.include(
-      'src/index.ts',
-    );
-
-    trigger({ kind: 'request', id: '2', method: 'tree/collapseAll', params: undefined });
-    await waitUntil(() => Boolean(findResponse(posted, '2')));
-
-    trigger({ kind: 'request', id: '3', method: 'tree/getVisibleRows', params: undefined });
-    await waitUntil(() => Boolean(findResponse(posted, '3')));
-    const response = findResponse(posted, '3') as { result: Array<{ relativePath: string }> };
-    expect(response.result.map((r) => r.relativePath)).to.not.include('src/index.ts');
-  });
-
-  it('tree/setShowSelectedOnly filters getChildren down to selected files and their ancestors', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
-    const { view, posted, trigger } = fakeView();
-    provider.resolveWebviewView(view);
-
-    await model.toggleFile('src/index.ts', true);
-
-    trigger({ kind: 'request', id: '1', method: 'tree/setShowSelectedOnly', params: { enabled: true } });
-    await waitUntil(() => Boolean(findResponse(posted, '1')));
-
-    trigger({ kind: 'request', id: '2', method: 'tree/getChildren', params: { path: undefined } });
-    await waitUntil(() => Boolean(findResponse(posted, '2')));
-    const response = findResponse(posted, '2') as { result: Array<{ name: string }> };
-    expect(response.result.map((r) => r.name)).to.deep.equal(['src']); // README.md isn't selected, so it's hidden
   });
 
   it('file/open resolves the relative path and opens it via vscode.open', async () => {
@@ -614,30 +553,23 @@ describe('HandoffPanelProvider', () => {
     expect(errorEvent?.payload.message).to.equal('Select at least one file before generating.');
   });
 
-  it('invalidateRepoRootCache() does not throw and does not disturb the current state', async () => {
+  it('refresh() re-reads the tree, invalidates the repo-root cache, and pushes updated state — exposed for the aiHandoff.refreshTree command', async () => {
     const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
-    const { view } = fakeView();
+    const { view, posted } = fakeView();
     provider.resolveWebviewView(view);
 
-    expect(() => provider.invalidateRepoRootCache()).to.not.throw();
-  });
+    expect(() => provider.refresh()).to.not.throw();
 
-  it('actions/refresh triggers a tree/invalidated event and pushes updated state', async () => {
-    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
-    const { view, posted, trigger } = fakeView();
-    provider.resolveWebviewView(view);
+    const isEvent = (name: string) => (m: unknown) =>
+      (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === name;
 
-    trigger({ kind: 'request', id: '1', method: 'actions/refresh', params: undefined });
-    await waitUntil(() => Boolean(findResponse(posted, '1')));
+    await waitUntil(() => posted.some(isEvent('tree/invalidated')));
+    expect(
+      posted.some(isEvent('tree/invalidated')),
+      'model.refresh() should fire onDidChangeTree, surfaced as tree/invalidated',
+    ).to.be.true;
 
-    const invalidatedEvent = posted.find(
-      (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'tree/invalidated',
-    );
-    expect(invalidatedEvent, 'model.refresh() should fire onDidChangeTree, surfaced as tree/invalidated').to.exist;
-
-    const stateEvent = posted.find(
-      (m) => (m as { kind?: string; event?: string }).kind === 'event' && (m as { event?: string }).event === 'state',
-    );
-    expect(stateEvent, 'actions/refresh should also push fresh stats').to.exist;
+    await waitUntil(() => posted.some(isEvent('state')));
+    expect(posted.some(isEvent('state')), 'refresh() should also push fresh stats').to.be.true;
   });
 });
