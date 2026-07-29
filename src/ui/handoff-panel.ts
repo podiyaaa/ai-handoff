@@ -269,6 +269,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         skipped: [],
         gitDiffEnabled: this.gitDiffEnabled,
         diffScope: this.diffScope,
+        hasWorkspace: false,
       };
     }
 
@@ -294,6 +295,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       skipped: this.lastSkipped,
       gitDiffEnabled: this.gitDiffEnabled,
       diffScope: this.diffScope,
+      hasWorkspace: true,
     };
   }
 
@@ -576,6 +578,16 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     #tree-spacer {
       position: relative;
     }
+    #no-workspace {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 24px 16px;
+      text-align: center;
+      opacity: 0.7;
+      font-size: 0.95em;
+    }
     .tree-row {
       position: absolute;
       left: 0;
@@ -790,6 +802,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       <div class="error hidden" id="error"></div>
     </div>
     <div id="tree-scroll">
+      <div id="no-workspace" class="hidden">No workspace folder is open — open a folder to select files.</div>
       <div id="tree-spacer" role="tree" aria-label="File tree" aria-multiselectable="true"></div>
     </div>
 

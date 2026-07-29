@@ -27,6 +27,7 @@
     var $ins = document.getElementById('instructions');
     var $btn = document.getElementById('generate');
     var $actionsError = document.getElementById('actions-error');
+    var $noWorkspace = document.getElementById('no-workspace');
     var $bookmarkSave = document.getElementById('bookmark-save');
     var $bookmarksEmpty = document.getElementById('bookmarks-empty');
     var $bookmarkList = document.getElementById('bookmark-list');
@@ -197,6 +198,7 @@
       }
       renderSkipped(state.skipped);
       $actionsError.classList.add('hidden');
+      $noWorkspace.classList.toggle('hidden', state.hasWorkspace);
     }
 
     bridge.on('state', applyState);

@@ -61,6 +61,8 @@ export interface PanelState {
   skipped: PanelSkippedFile[];
   gitDiffEnabled: boolean;
   diffScope: DiffScope;
+  /** False when no workspace folder is open — the tree shows an explanatory empty state instead of a silently blank list. */
+  hasWorkspace: boolean;
 }
 
 /**

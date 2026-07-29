@@ -131,6 +131,7 @@ describe('HandoffPanelProvider', () => {
     expect(view.webview.html).to.include('codicon.ttf');
     expect(view.webview.html).to.include('id="tree-scroll"');
     expect(view.webview.html).to.include('id="query"');
+    expect(view.webview.html).to.include('id="no-workspace"');
     expect(view.webview.html).to.include('role="tree"');
   });
 
@@ -283,11 +284,24 @@ describe('HandoffPanelProvider', () => {
     await waitUntil(() => Boolean(findResponse(posted, '1')));
 
     const response = findResponse(posted, '1') as {
-      result: { state: { stats: { fileCount: number }; format: string }; bookmarks: Array<{ name: string }> };
+      result: { state: { stats: { fileCount: number }; format: string; hasWorkspace: boolean }; bookmarks: Array<{ name: string }> };
     };
     expect(response.result.state.stats.fileCount).to.equal(1);
     expect(response.result.state.format).to.equal('xml');
+    expect(response.result.state.hasWorkspace).to.be.true;
     expect(response.result.bookmarks.map((b) => b.name)).to.deep.equal(['Existing']);
+  });
+
+  it('actions/ready reports hasWorkspace: false when no workspace folder is open, so the tree can show an empty state', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, undefined);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/ready', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    const response = findResponse(posted, '1') as { result: { state: { hasWorkspace: boolean } } };
+    expect(response.result.state.hasWorkspace).to.be.false;
   });
 
   it('actions/setFormat updates the format and is reflected in the next actions/ready call', async () => {
