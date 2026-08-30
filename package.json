@@ -83,6 +83,10 @@
         "icon": "$(rocket)"
       },
       {
+        "command": "aiHandoff.selectWithImports",
+        "title": "AI Handoff: Select with imports"
+      },
+      {
         "command": "aiHandoff.refreshTree",
         "title": "Refresh",
         "icon": "$(refresh)"
@@ -129,6 +133,11 @@
         {
           "command": "aiHandoff.generateFromExplorerBase64",
           "group": "7_modification@100"
+        },
+        {
+          "command": "aiHandoff.selectWithImports",
+          "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
+          "group": "7_modification@101"
         }
       ],
       "editor/context": [
@@ -144,6 +153,11 @@
           "command": "aiHandoff.generateFromSelection",
           "when": "editorHasSelection",
           "group": "7_modification@101"
+        },
+        {
+          "command": "aiHandoff.selectWithImports",
+          "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
+          "group": "7_modification@102"
         }
       ],
       "editor/title/context": [
@@ -154,6 +168,11 @@
         {
           "command": "aiHandoff.generateFromEditorBase64",
           "group": "7_modification@100"
+        },
+        {
+          "command": "aiHandoff.selectWithImports",
+          "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
+          "group": "7_modification@101"
         }
       ],
       "view/title": [

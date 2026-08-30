@@ -103,6 +103,18 @@ Module._load = function (request, parent, isMain) {
               return [e.name, type];
             });
           },
+          readFile: async (uri) => {
+            const buf = await realFs.readFile(uri.fsPath);
+            return new Uint8Array(buf);
+          },
+          stat: async (uri) => {
+            const s = await realFs.stat(uri.fsPath);
+            let type = FileType.Unknown;
+            if (s.isDirectory()) type |= FileType.Directory;
+            if (s.isFile()) type |= FileType.File;
+            if (s.isSymbolicLink()) type |= FileType.SymbolicLink;
+            return { type, size: s.size, ctime: s.ctimeMs, mtime: s.mtimeMs };
+          },
         },
         createFileSystemWatcher: () => ({
           onDidCreate: () => ({ dispose: () => {} }),
