@@ -200,9 +200,11 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     });
     bridge.handle('actions/setLookForImports', ({ enabled }) => {
       this.model.setLookForImports(enabled);
+      void this.pushState();
     });
     bridge.handle('actions/setImportsRecursive', ({ enabled }) => {
       this.model.setImportsRecursive(enabled);
+      void this.pushState();
     });
     bridge.handle('actions/overrideFile', async ({ path: relativePath }) => {
       this.overriddenPaths.add(relativePath);
