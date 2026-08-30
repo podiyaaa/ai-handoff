@@ -594,3 +594,157 @@ describe('FileTreeModel — onDidToggleIndividualFile', () => {
     expect(model.getSelection()).to.deep.equal(['src/index.ts']);
   });
 });
+
+async function makeRelativeImportRoot(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-tree-imports-rel-'));
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.writeFile(path.join(root, 'src', 'entry.ts'), `import Helper from './helper';\n`);
+  await fs.writeFile(path.join(root, 'src', 'helper.ts'), `import Deep from './deep';\n`);
+  await fs.writeFile(path.join(root, 'src', 'deep.ts'), `export const deep = true;\n`);
+  return root;
+}
+
+/**
+ * A fixture with both a plain relative import and a bare specifier resolved
+ * through a tsconfig path alias, declared one `extends` hop away from the
+ * config actually found (tsconfig.json at the workspace root extends
+ * tsconfig.base.json, which is the one that actually declares baseUrl/paths).
+ */
+async function makeAliasImportRoot(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-tree-imports-alias-'));
+  await fs.mkdir(path.join(root, 'src', 'app'), { recursive: true });
+  await fs.writeFile(path.join(root, 'tsconfig.json'), JSON.stringify({ extends: './tsconfig.base.json' }));
+  await fs.writeFile(
+    path.join(root, 'tsconfig.base.json'),
+    JSON.stringify({
+      compilerOptions: { baseUrl: '.', paths: { '@app/*': ['src/app/*'] } },
+    }),
+  );
+  await fs.writeFile(
+    path.join(root, 'src', 'entry.ts'),
+    `import Helper from './helper';\nimport Widget from '@app/widget';\n`,
+  );
+  await fs.writeFile(path.join(root, 'src', 'helper.ts'), `import Deep from './deep';\n`);
+  await fs.writeFile(path.join(root, 'src', 'deep.ts'), `export const deep = true;\n`);
+  await fs.writeFile(path.join(root, 'src', 'app', 'widget.ts'), `export const widget = true;\n`);
+  return root;
+}
+
+describe('FileTreeModel — resolveImportClosure with plain relative imports', () => {
+  let root: string;
+  let model: FileTreeModel;
+
+  beforeEach(async () => {
+    root = await makeRelativeImportRoot();
+    model = new FileTreeModel([fakeFolder(root, 0)]);
+  });
+  afterEach(async () => {
+    model.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('resolves a direct relative import to its workspace-relative path', async () => {
+    expect(await model.resolveImportClosure('src/entry.ts', false)).to.deep.equal(['src/helper.ts']);
+  });
+
+  it('non-recursive stops at direct imports, not the whole transitive graph', async () => {
+    const closure = await model.resolveImportClosure('src/entry.ts', false);
+    expect(closure).to.not.include('src/deep.ts');
+  });
+
+  it('recursive walks the whole transitive chain', async () => {
+    expect(await model.resolveImportClosure('src/entry.ts', true)).to.deep.equal(['src/helper.ts', 'src/deep.ts']);
+  });
+
+  it('returns [] for a file with no imports', async () => {
+    expect(await model.resolveImportClosure('src/deep.ts', true)).to.deep.equal([]);
+  });
+});
+
+describe('FileTreeModel — resolveImportClosure with a tsconfig path alias', () => {
+  let root: string;
+  let model: FileTreeModel;
+
+  beforeEach(async () => {
+    root = await makeAliasImportRoot();
+    model = new FileTreeModel([fakeFolder(root, 0)]);
+  });
+  afterEach(async () => {
+    model.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('resolves a bare specifier through a tsconfig path alias declared one `extends` hop away', async () => {
+    const closure = await model.resolveImportClosure('src/entry.ts', false);
+    expect(closure).to.deep.equal(['src/helper.ts', 'src/app/widget.ts']);
+  });
+
+  it('follows the transitive graph through both the relative import and the aliased one', async () => {
+    const closure = await model.resolveImportClosure('src/entry.ts', true);
+    expect(closure.slice().sort()).to.deep.equal(['src/app/widget.ts', 'src/deep.ts', 'src/helper.ts'].sort());
+  });
+
+  it('never resolves a genuine bare package import (no alias match) into node_modules', async () => {
+    await fs.writeFile(path.join(root, 'src', 'uses-pkg.ts'), `import x from 'left-pad';\n`);
+    expect(await model.resolveImportClosure('src/uses-pkg.ts', true)).to.deep.equal([]);
+  });
+});
+
+describe('FileTreeModel — toggleFile import cascade', () => {
+  let root: string;
+  let model: FileTreeModel;
+
+  beforeEach(async () => {
+    root = await makeAliasImportRoot();
+    model = new FileTreeModel([fakeFolder(root, 0)]);
+  });
+  afterEach(async () => {
+    model.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('getLookForImports/getImportsRecursive default to off/recursive, matching the plan', () => {
+    expect(model.getLookForImports()).to.be.false;
+    expect(model.getImportsRecursive()).to.be.true;
+  });
+
+  it('does not cascade when "look for imports" is off (the default)', async () => {
+    await model.toggleFile('src/entry.ts', true);
+    expect(model.getSelection()).to.deep.equal(['src/entry.ts']);
+  });
+
+  it('cascades the full transitive closure when on (recursive is the default)', async () => {
+    model.setLookForImports(true);
+    await model.toggleFile('src/entry.ts', true);
+    expect(model.getSelection().sort()).to.deep.equal(
+      ['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts', 'src/deep.ts'].sort(),
+    );
+  });
+
+  it('cascades only direct imports when importsRecursive is turned off', async () => {
+    model.setLookForImports(true);
+    model.setImportsRecursive(false);
+    await model.toggleFile('src/entry.ts', true);
+    expect(model.getSelection().sort()).to.deep.equal(['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts'].sort());
+  });
+
+  it('does not cascade for a non-JS/TS file even when "look for imports" is on', async () => {
+    await fs.writeFile(path.join(root, 'README.md'), '# readme');
+    model.setLookForImports(true);
+    await model.toggleFile('README.md', true);
+    expect(model.getSelection()).to.deep.equal(['README.md']);
+  });
+
+  it('fires onDidChangeTree/onDidChangeSelection exactly once for the whole cascade, not once per resolved file', async () => {
+    model.setLookForImports(true);
+    let treeFires = 0;
+    let selectionFires = 0;
+    model.onDidChangeTree(() => treeFires++);
+    model.onDidChangeSelection(() => selectionFires++);
+
+    await model.toggleFile('src/entry.ts', true);
+
+    expect(treeFires).to.equal(1);
+    expect(selectionFires).to.equal(1);
+  });
+});

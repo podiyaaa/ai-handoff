@@ -198,6 +198,26 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('aiHandoff.generateFromPanel', async () => {
       await handoffPanel.runGenerate();
     }),
+    vscode.commands.registerCommand('aiHandoff.selectWithImports', async (...args: unknown[]) => {
+      const files = collectExplorerFiles(args);
+      if (files.length === 0) {
+        vscode.window.showWarningMessage('AI Handoff: no file to select imports from.');
+        return;
+      }
+      const recursive = fileTreeModel.getImportsRecursive();
+      const before = new Set(fileTreeModel.getSelection());
+      for (const file of files) {
+        const closure = await fileTreeModel.resolveImportClosure(file.relativePath, recursive);
+        await fileTreeModel.toggleFile(file.relativePath, true);
+        for (const relativePath of closure) {
+          await fileTreeModel.toggleFile(relativePath, true);
+        }
+      }
+      const addedCount = fileTreeModel.getSelection().filter((p) => !before.has(p)).length;
+      vscode.window.showInformationMessage(
+        `AI Handoff: added ${addedCount} file(s) (including imports) to the selection.`,
+      );
+    }),
     vscode.commands.registerCommand('aiHandoff.refreshTree', () => {
       handoffPanel.refresh();
       adHocRepoRootCache.invalidate();

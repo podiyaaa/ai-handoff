@@ -198,6 +198,12 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       this.base64Encode = enabled;
       void this.pushState();
     });
+    bridge.handle('actions/setLookForImports', ({ enabled }) => {
+      this.model.setLookForImports(enabled);
+    });
+    bridge.handle('actions/setImportsRecursive', ({ enabled }) => {
+      this.model.setImportsRecursive(enabled);
+    });
     bridge.handle('actions/overrideFile', async ({ path: relativePath }) => {
       this.overriddenPaths.add(relativePath);
       // Add the overridden path to the selection too, so it actually gets
@@ -276,6 +282,8 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         gitDiffEnabled: this.gitDiffEnabled,
         diffScope: this.diffScope,
         base64Encode: this.base64Encode,
+        lookForImports: this.model.getLookForImports(),
+        importsRecursive: this.model.getImportsRecursive(),
         hasWorkspace: false,
       };
     }
@@ -303,6 +311,8 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       gitDiffEnabled: this.gitDiffEnabled,
       diffScope: this.diffScope,
       base64Encode: this.base64Encode,
+      lookForImports: this.model.getLookForImports(),
+      importsRecursive: this.model.getImportsRecursive(),
       hasWorkspace: true,
     };
   }
@@ -847,6 +857,15 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         <option value="staged">Staged only</option>
         <option value="both">Both</option>
       </select>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="look-for-imports" />
+        <label for="look-for-imports">Look for imports (JS/TS)</label>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="imports-recursive" checked />
+        <label for="imports-recursive">Follow imports recursively</label>
+      </div>
 
       <button class="primary" id="generate">Generate Handoff</button>
       <div id="actions-error" class="error hidden"></div>

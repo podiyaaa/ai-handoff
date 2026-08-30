@@ -34,8 +34,11 @@ import ignore, { Ignore } from 'ignore';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { DEFAULT_SMART_FILTER_PATTERNS, parseSearchExcludeDirs } from '../core/filter';
+import { extractImportSpecifiers, isJsOrTsFile, isRelativeSpecifier, JS_TS_EXTENSIONS } from '../core/import-parser';
 import { matchesSearchQuery, ParsedSearchQuery } from '../core/search-filter';
+import { matchPathAlias } from '../core/tsconfig-paths';
 import type { TreeNodeInfo } from '../core/types';
+import { TsconfigResolver } from './tsconfig-resolver';
 
 /** A single file entry in the background search index. */
 interface SearchIndexEntry {
@@ -132,6 +135,13 @@ export class FileTreeModel implements vscode.Disposable {
    */
   private showSelectedOnly = false;
   private selectedAncestorDirs: Set<string> | undefined;
+
+  // -- JS/TS import-following selection -----------------------------------
+  private readonly tsconfigResolver = new TsconfigResolver();
+  /** "Look for imports" — whether checking a JS/TS file's checkbox also auto-selects its imports. Off by default. */
+  private lookForImports = false;
+  /** Direct imports only (false) vs. the whole transitive import graph (true, the default). */
+  private importsRecursive = true;
 
   // -- Background search index --------------------------------------------
   private searchIndex: SearchIndexEntry[] | undefined;
@@ -464,6 +474,26 @@ export class FileTreeModel implements vscode.Disposable {
     return this.showSelectedOnly;
   }
 
+  // -- JS/TS import-following selection -------------------------------------
+
+  /** Toggle "look for imports" — whether ticking a JS/TS file's checkbox also selects its imports. */
+  setLookForImports(value: boolean): void {
+    this.lookForImports = value;
+  }
+
+  getLookForImports(): boolean {
+    return this.lookForImports;
+  }
+
+  /** Toggle whether the import cascade follows the whole transitive graph (true) or just direct imports (false). */
+  setImportsRecursive(value: boolean): void {
+    this.importsRecursive = value;
+  }
+
+  getImportsRecursive(): boolean {
+    return this.importsRecursive;
+  }
+
   /**
    * Derive every ancestor directory of every selected path, straight from
    * `selected` — no disk walk needed (unlike the search index's
@@ -539,10 +569,22 @@ export class FileTreeModel implements vscode.Disposable {
    * Toggle a single file's checkbox. When unchecking, also clears any
    * ancestor directories from `checkedDirs` — a parent can no longer be
    * considered "fully selected" after one of its descendants is removed.
+   *
+   * When checking a JS/TS file with "look for imports" on, also resolves
+   * its import closure (direct-only or the whole transitive graph,
+   * depending on `importsRecursive`) and adds every resolved file into the
+   * selection — but only fires the tree/selection-changed events once at
+   * the end, not once per resolved file.
    */
   async toggleFile(relativePath: string, checked: boolean): Promise<void> {
     if (checked) {
       this.selected.add(relativePath);
+      if (this.lookForImports && isJsOrTsFile(relativePath)) {
+        const closure = await this.resolveImportClosure(relativePath, this.importsRecursive);
+        for (const resolved of closure) {
+          this.selected.add(resolved);
+        }
+      }
     } else {
       this.selected.delete(relativePath);
       this.removeAncestorDirs(relativePath);
@@ -551,6 +593,146 @@ export class FileTreeModel implements vscode.Disposable {
     this._onDidToggleIndividualFile.fire({ relativePath, checked });
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire(this.getSelection());
+  }
+
+  /**
+   * BFS the JS/TS import graph starting at `relativePath`, resolving each
+   * specifier (relative imports directly, bare specifiers via a tsconfig/
+   * jsconfig path alias) to a real workspace-relative file. Never resolves
+   * into node_modules: a bare specifier with no matching alias is a genuine
+   * package import and is dropped. `recursive: false` returns only the
+   * starting file's own direct imports; `true` continues until no new files
+   * are found. A `visited` set prevents cycles/dupes (the starting file
+   * itself is pre-seeded so it's never re-added to the result).
+   */
+  async resolveImportClosure(relativePath: string, recursive: boolean): Promise<string[]> {
+    const visited = new Set<string>([relativePath]);
+    const result: string[] = [];
+    let frontier: string[] = [relativePath];
+
+    while (frontier.length > 0) {
+      const nextFrontier: string[] = [];
+      for (const current of frontier) {
+        const resolved = await this.resolveDirectImports(current);
+        for (const rel of resolved) {
+          if (visited.has(rel)) {
+            continue;
+          }
+          visited.add(rel);
+          result.push(rel);
+          nextFrontier.push(rel);
+        }
+      }
+      if (!recursive) {
+        break;
+      }
+      frontier = nextFrontier;
+    }
+
+    return result;
+  }
+
+  /** Resolve just the direct imports of one file to workspace-relative paths that exist on disk. */
+  private async resolveDirectImports(relativePath: string): Promise<string[]> {
+    const ctx = this.resolveContext(relativePath);
+    if (!ctx) {
+      return [];
+    }
+    const source = await this.readFileTextSafe(ctx.absolutePath);
+    if (source === undefined) {
+      return [];
+    }
+
+    const resolved: string[] = [];
+    for (const specifier of extractImportSpecifiers(source)) {
+      const bases = await this.candidateBasePaths(specifier, ctx);
+      if (bases.length === 0) {
+        // Either a relative import (always has exactly one base) or a bare
+        // specifier with no tsconfig/jsconfig alias match — the latter is a
+        // genuine package import, never resolved into node_modules.
+        continue;
+      }
+      const hit = await this.probeCandidates(bases);
+      if (!hit) {
+        continue;
+      }
+      const rel = this.absoluteToOwningRelative(hit);
+      if (rel) {
+        resolved.push(rel);
+      }
+    }
+    return resolved;
+  }
+
+  /**
+   * Candidate base paths (before extension/index probing) for one import
+   * specifier. A relative specifier resolves directly against the importing
+   * file's own directory. A bare specifier is only a candidate if the
+   * importing file's tsconfig/jsconfig alias config matches it — otherwise
+   * it's skipped entirely (never guessed at, never resolved into node_modules).
+   */
+  private async candidateBasePaths(specifier: string, ctx: PathContext): Promise<string[]> {
+    if (isRelativeSpecifier(specifier)) {
+      return [path.resolve(path.dirname(ctx.absolutePath), specifier)];
+    }
+    const aliasConfig = await this.tsconfigResolver.resolveForFile(ctx.absolutePath, ctx.folderRoot);
+    if (!aliasConfig) {
+      return [];
+    }
+    const matches = matchPathAlias(specifier, aliasConfig.paths);
+    return matches.map((m) => path.resolve(aliasConfig.baseUrlAbs, m));
+  }
+
+  /**
+   * Probe each base path on disk, in order: the exact path, the path plus
+   * each JS/TS extension, then `path/index` plus each extension. Returns the
+   * first absolute path that exists as a file, or `undefined` if none of the
+   * bases resolve to anything.
+   */
+  private async probeCandidates(bases: string[]): Promise<string | undefined> {
+    for (const base of bases) {
+      const probes = [
+        base,
+        ...JS_TS_EXTENSIONS.map((ext) => base + ext),
+        ...JS_TS_EXTENSIONS.map((ext) => path.join(base, `index${ext}`)),
+      ];
+      for (const probe of probes) {
+        if (await this.pathExistsAsFile(probe)) {
+          return probe;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private async pathExistsAsFile(absolutePath: string): Promise<boolean> {
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath));
+      return (stat.type & vscode.FileType.File) !== 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async readFileTextSafe(absolutePath: string): Promise<string | undefined> {
+    try {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(absolutePath));
+      return Buffer.from(bytes).toString('utf-8');
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Convert a resolved absolute path back to a workspace-relative path, or `undefined` if it's outside every workspace folder. */
+  private absoluteToOwningRelative(absolutePath: string): string | undefined {
+    const owner = this.workspaceFolders.find((f) => {
+      const rel = path.relative(f.uri.fsPath, absolutePath);
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    });
+    if (!owner) {
+      return undefined;
+    }
+    return this.toRelative(absolutePath, owner.uri.fsPath, this.workspaceFolders.length > 1 ? owner.name : undefined);
   }
 
   /**
