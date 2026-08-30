@@ -11,6 +11,10 @@ tsconfig.test.json
 # actual shipped webview code and stays included.
 webview-ui/
 
+# JetBrains/Android Studio bridge POC — a separate proof-of-concept, not
+# wired into this extension's own build; never ships in the .vsix.
+jetbrains-poc/
+
 # Dev / repo housekeeping
 .gitignore
 .gitattributes
