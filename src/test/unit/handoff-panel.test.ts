@@ -335,6 +335,20 @@ describe('HandoffPanelProvider', () => {
     expect(response.result.state.diffScope).to.equal('staged');
   });
 
+  it('actions/setBase64Encode updates state and is reflected in the next actions/ready call', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/setBase64Encode', params: { enabled: true } });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    trigger({ kind: 'request', id: '2', method: 'actions/ready', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '2')));
+    const response = findResponse(posted, '2') as { result: { state: { base64Encode: boolean } } };
+    expect(response.result.state.base64Encode).to.be.true;
+  });
+
   it('actions/overrideFile adds the path to both overriddenPaths and the current selection', async () => {
     const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted, trigger } = fakeView();

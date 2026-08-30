@@ -21,6 +21,7 @@
     var $diffLabel = document.getElementById('stat-diff-label');
     var $diffFiles = document.getElementById('stat-diff-files');
     var $format = document.getElementById('format');
+    var $base64Encode = document.getElementById('base64-encode');
     var $diffEnabled = document.getElementById('diff-enabled');
     var $diffScope = document.getElementById('diff-scope');
     var $insWrap = document.getElementById('instructions-wrap');
@@ -72,6 +73,9 @@
 
     $format.addEventListener('change', function () {
       bridge.call('actions/setFormat', { format: $format.value });
+    });
+    $base64Encode.addEventListener('change', function () {
+      bridge.call('actions/setBase64Encode', { enabled: $base64Encode.checked });
     });
     $diffEnabled.addEventListener('change', function () {
       $diffScope.classList.toggle('hidden', !$diffEnabled.checked);
@@ -182,6 +186,7 @@
       $size.textContent = state.stats.sizeFormatted;
       $tokens.textContent = '~' + state.stats.tokensFormatted;
       $format.value = state.format;
+      $base64Encode.checked = state.base64Encode;
       $diffEnabled.checked = state.gitDiffEnabled;
       $diffScope.value = state.diffScope;
       $diffScope.classList.toggle('hidden', !state.gitDiffEnabled);

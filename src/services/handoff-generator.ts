@@ -291,8 +291,13 @@ export async function generateHandoff(
   const totalSizeBytes = included.reduce((sum, f) => sum + f.sizeBytes, 0);
   const estimatedTokens = estimateTokens(text, options.tokenEstimationRatio);
 
+  // base64 is a post-processing step applied only to the *returned* text —
+  // stats are computed above from the real formatted content and must stay
+  // that way, not reflect the inflated encoded size.
+  const outputText = options.base64Encode ? Buffer.from(text, 'utf-8').toString('base64') : text;
+
   return {
-    text,
+    text: outputText,
     included,
     skipped,
     diff,
