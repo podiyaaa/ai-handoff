@@ -1,17 +1,20 @@
 import { expect } from 'chai';
 import {
   formatHandoff,
+  formatStatsForPanel,
   getLanguageForPath,
   applyLineNumbers,
   chooseFence,
   escapeXmlAttr,
+  formatDiffSection,
+  formatDiffFile,
 } from '../../core/formatter';
-import type { IncludedFile, SkippedFile } from '../../core/types';
+import type { DiffFileChange, GitDiffResult, IncludedFile, LineRange, SkippedFile } from '../../core/types';
 
 function mkFile(
   relativePath: string,
   content: string | null,
-  opts: { isBinary?: boolean; sizeBytes?: number } = {},
+  opts: { isBinary?: boolean; sizeBytes?: number; lineRange?: LineRange } = {},
 ): IncludedFile {
   return {
     relativePath,
@@ -19,6 +22,7 @@ function mkFile(
     content,
     isBinary: opts.isBinary ?? false,
     sizeBytes: opts.sizeBytes ?? (content?.length ?? 0),
+    lineRange: opts.lineRange,
   };
 }
 
@@ -84,6 +88,31 @@ describe('applyLineNumbers', () => {
     const out = applyLineNumbers(input).split('\n');
     expect(out[0].startsWith('  1  ')).to.be.true;
     expect(out[99].startsWith('100  ')).to.be.true;
+  });
+
+  it('numbers from a custom start line, for a sliced excerpt of a larger file', () => {
+    expect(applyLineNumbers('a\nb\nc', 10)).to.equal('10  a\n11  b\n12  c');
+  });
+
+  it('right-aligns against the largest number reached, not the line count', () => {
+    // 3 lines starting at 98 reaches 100 — width should be 3, not 1.
+    const out = applyLineNumbers('a\nb\nc', 98).split('\n');
+    expect(out[0]).to.equal(' 98  a');
+    expect(out[2]).to.equal('100  c');
+  });
+});
+
+describe('formatStatsForPanel', () => {
+  it('adds formatted size and token strings alongside the raw stats', () => {
+    const out = formatStatsForPanel({
+      fileCount: 3,
+      totalSizeBytes: 24576,
+      estimatedTokens: 1500,
+      diffFileCount: 0,
+    });
+    expect(out.fileCount).to.equal(3);
+    expect(out.sizeFormatted).to.equal('24.0 KB');
+    expect(out.tokensFormatted).to.equal('1.5k');
   });
 });
 
@@ -160,6 +189,24 @@ describe('formatHandoff — XML format', () => {
     );
     expect(out).to.include('1  a');
     expect(out).to.include('2  b');
+  });
+
+  it('adds a lines="" attribute for a line-ranged excerpt', () => {
+    const out = formatHandoff(
+      [mkFile('a.ts', 'const x = 1;', { lineRange: { start: 10, end: 12 } })],
+      { format: 'xml', includeLineNumbers: false },
+    );
+    expect(out).to.equal('<file path="a.ts" lines="10-12">\nconst x = 1;\n</file>');
+  });
+
+  it('numbers a line-ranged excerpt starting from its original line number, not 1', () => {
+    const out = formatHandoff(
+      [mkFile('a.ts', 'a\nb\nc', { lineRange: { start: 10, end: 12 } })],
+      { format: 'xml', includeLineNumbers: true },
+    );
+    expect(out).to.include('10  a');
+    expect(out).to.include('11  b');
+    expect(out).to.include('12  c');
   });
 
   it('sorts multiple files by path', () => {
@@ -283,6 +330,14 @@ describe('formatHandoff — Markdown format', () => {
     expect(out).to.include('_Binary file (24.0 KB) — content omitted._');
   });
 
+  it('notes the line range in the heading for a line-ranged excerpt', () => {
+    const out = formatHandoff(
+      [mkFile('src/index.ts', 'const x = 1;', { lineRange: { start: 10, end: 12 } })],
+      { format: 'markdown', includeLineNumbers: false },
+    );
+    expect(out).to.include('### `src/index.ts` (lines 10-12)');
+  });
+
   it('renders skipped files section with heading', () => {
     const skipped: SkippedFile[] = [
       {
@@ -328,6 +383,14 @@ describe('formatHandoff — plain format', () => {
     );
     expect(out).to.include('--- logo.png ---');
     expect(out).to.include('[binary file, 1.0 KB, content omitted]');
+  });
+
+  it('notes the line range in the separator for a line-ranged excerpt', () => {
+    const out = formatHandoff(
+      [mkFile('src/index.ts', 'const x = 1;', { lineRange: { start: 10, end: 12 } })],
+      { format: 'plain', includeLineNumbers: false },
+    );
+    expect(out).to.equal('--- src/index.ts (lines 10-12) ---\nconst x = 1;');
   });
 
   it('renders instructions plainly', () => {
@@ -383,5 +446,108 @@ describe('formatHandoff — full handoff structure', () => {
   it('handles empty input gracefully', () => {
     const out = formatHandoff([], { format: 'xml', includeLineNumbers: false });
     expect(out).to.equal('');
+  });
+});
+
+function mkDiffFile(overrides: Partial<DiffFileChange> = {}): DiffFileChange {
+  return {
+    relativePath: 'src/a.ts',
+    changeType: 'modified',
+    patch: '@@ -1 +1 @@\n-old\n+new',
+    isBinary: false,
+    staged: false,
+    repoLabel: 'my-repo',
+    repoRoot: '/repo',
+    ...overrides,
+  };
+}
+
+function mkDiffResult(files: DiffFileChange[], overrides: Partial<GitDiffResult> = {}): GitDiffResult {
+  return {
+    scope: 'working',
+    files,
+    reposWithNoGit: [],
+    ...overrides,
+  };
+}
+
+describe('formatDiffFile', () => {
+  it('renders a modified file in each format', () => {
+    const file = mkDiffFile();
+    expect(formatDiffFile(file, 'xml')).to.equal(
+      '<diff_file path="src/a.ts" change="modified">\n@@ -1 +1 @@\n-old\n+new\n</diff_file>',
+    );
+    expect(formatDiffFile(file, 'markdown')).to.include('##### `src/a.ts` — modified');
+    expect(formatDiffFile(file, 'markdown')).to.include('```diff');
+    expect(formatDiffFile(file, 'plain')).to.equal(
+      '--- src/a.ts [modified] ---\n@@ -1 +1 @@\n-old\n+new',
+    );
+  });
+
+  it('includes the old path for a rename', () => {
+    const file = mkDiffFile({ changeType: 'renamed', oldPath: 'src/old.ts' });
+    expect(formatDiffFile(file, 'xml')).to.include('from="src/old.ts"');
+    expect(formatDiffFile(file, 'markdown')).to.include('(renamed from `src/old.ts`)');
+    expect(formatDiffFile(file, 'plain')).to.include('(renamed from src/old.ts)');
+  });
+
+  it('marks binary diffs', () => {
+    const file = mkDiffFile({ isBinary: true, patch: 'Binary files a/img.png and b/img.png differ' });
+    expect(formatDiffFile(file, 'xml')).to.include('binary="true"');
+  });
+});
+
+describe('formatDiffSection', () => {
+  it('returns an empty string when there are no files', () => {
+    expect(formatDiffSection(mkDiffResult([]), 'xml')).to.equal('');
+  });
+
+  it('returns an empty string when the diff read failed', () => {
+    const result = mkDiffResult([mkDiffFile()], { error: 'no-repos-found' });
+    expect(formatDiffSection(result, 'xml')).to.equal('');
+  });
+
+  it('wraps files in a single-repo section without repo prefixing', () => {
+    const result = mkDiffResult([mkDiffFile({ relativePath: 'a.ts' })]);
+    const out = formatDiffSection(result, 'xml');
+    expect(out).to.include('<git_diff>');
+    expect(out).to.include('<diff_file path="a.ts"');
+    expect(out).not.to.include('my-repo/a.ts');
+  });
+
+  it('splits working vs staged files into separate labeled groups for scope "both"', () => {
+    const result = mkDiffResult(
+      [
+        mkDiffFile({ relativePath: 'unstaged.ts', staged: false }),
+        mkDiffFile({ relativePath: 'staged.ts', staged: true }),
+      ],
+      { scope: 'both' },
+    );
+    const out = formatDiffSection(result, 'markdown');
+    expect(out).to.include('Unstaged changes');
+    expect(out).to.include('Staged changes');
+    const idxUnstaged = out.indexOf('unstaged.ts');
+    const idxStaged = out.indexOf('staged.ts');
+    expect(idxUnstaged).to.be.greaterThan(-1);
+    expect(idxStaged).to.be.greaterThan(-1);
+  });
+
+  it('omits an empty staged/unstaged group', () => {
+    const result = mkDiffResult([mkDiffFile({ staged: false })]);
+    const out = formatDiffSection(result, 'plain');
+    expect(out).to.include('Unstaged changes');
+    expect(out).not.to.include('Staged changes');
+  });
+
+  it('prefixes paths with the repo label only when multiple repos contributed', () => {
+    const result = mkDiffResult([
+      mkDiffFile({ relativePath: 'a.ts', repoLabel: 'service-a' }),
+      mkDiffFile({ relativePath: 'b.ts', repoLabel: 'service-b' }),
+    ]);
+    const out = formatDiffSection(result, 'plain');
+    expect(out).to.include('service-a/a.ts');
+    expect(out).to.include('service-b/b.ts');
+    expect(out).to.include('service-a — Unstaged changes');
+    expect(out).to.include('service-b — Unstaged changes');
   });
 });

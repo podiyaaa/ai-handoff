@@ -6,6 +6,11 @@ tsconfig.json
 tsconfig.test.json
 .eslintrc.json
 
+# Standalone webview dev harness (mock bridge + browser test page) —
+# dev-only, never loaded by the real extension. media/webview/*.js is the
+# actual shipped webview code and stays included.
+webview-ui/
+
 # Dev / repo housekeeping
 .gitignore
 .gitattributes
@@ -13,6 +18,7 @@ setup-github.sh
 CLAUDE.md
 CONTRIBUTING.md
 NEXT-STEPS.md
+.vscode/
 
 # Test artifacts
 *.xml

@@ -6,6 +6,7 @@ import {
   isBinary,
   isBinaryByContent,
   isBinaryByExtension,
+  parseSearchExcludeDirs,
   BINARY_EXTENSIONS,
   DEFAULT_SMART_FILTER_PATTERNS,
 } from '../../core/filter';
@@ -386,6 +387,43 @@ describe('formatBytes', () => {
   it('formats gigabytes', () => {
     expect(formatBytes(1024 * 1024 * 1024)).to.equal('1.0 GB');
     expect(formatBytes(1024 * 1024 * 1024 * 2.3)).to.equal('2.3 GB');
+  });
+});
+
+describe('parseSearchExcludeDirs', () => {
+  it('splits a comma-separated list and trims whitespace', () => {
+    expect(parseSearchExcludeDirs('vendor, coverage , generated')).to.deep.equal([
+      'vendor/',
+      'coverage/',
+      'generated/',
+    ]);
+  });
+
+  it('appends a trailing slash so it matches directories, not same-named files', () => {
+    expect(parseSearchExcludeDirs('vendor')).to.deep.equal(['vendor/']);
+  });
+
+  it('leaves an already-trailing-slash pattern untouched', () => {
+    expect(parseSearchExcludeDirs('vendor/')).to.deep.equal(['vendor/']);
+  });
+
+  it('preserves wildcard glob patterns', () => {
+    expect(parseSearchExcludeDirs('**/generated,*.egg-info')).to.deep.equal([
+      '**/generated/',
+      '*.egg-info/',
+    ]);
+  });
+
+  it('drops empty entries from blank/whitespace-only segments', () => {
+    expect(parseSearchExcludeDirs('vendor,,  ,coverage')).to.deep.equal(['vendor/', 'coverage/']);
+  });
+
+  it('returns an empty array for an empty string', () => {
+    expect(parseSearchExcludeDirs('')).to.deep.equal([]);
+  });
+
+  it('returns an empty array for a whitespace-only string', () => {
+    expect(parseSearchExcludeDirs('   ')).to.deep.equal([]);
   });
 });
 

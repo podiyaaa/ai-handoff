@@ -2,7 +2,7 @@
   "name": "ai-handoff",
   "displayName": "AI Handoff",
   "description": "Select multiple files and generate a clean, structured handoff (directory tree + file contents) ready to paste into any AI chat — Claude, ChatGPT, Gemini, and more.",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "publisher": "RavinduKanchana",
   "engines": {
     "vscode": "^1.80.0"
@@ -48,21 +48,9 @@
     "views": {
       "aiHandoff": [
         {
-          "id": "aiHandoff.searchBar",
-          "name": "Search",
-          "type": "webview",
-          "contextualTitle": "AI Handoff"
-        },
-        {
           "icon": "media/icon.png",
-          "id": "aiHandoff.fileTree",
-          "name": "Files",
-          "contextualTitle": "AI Handoff"
-        },
-        {
-          "icon": "media/icon.svg",
-          "id": "aiHandoff.actionPanel",
-          "name": "Actions",
+          "id": "aiHandoff.mainView",
+          "name": "AI Handoff",
           "type": "webview",
           "contextualTitle": "AI Handoff"
         }
@@ -72,6 +60,14 @@
       {
         "command": "aiHandoff.generateFromExplorer",
         "title": "AI Handoff: Generate from selection"
+      },
+      {
+        "command": "aiHandoff.generateFromEditor",
+        "title": "AI Handoff: Generate handoff from this file"
+      },
+      {
+        "command": "aiHandoff.generateFromSelection",
+        "title": "AI Handoff: Generate handoff from selected lines"
       },
       {
         "command": "aiHandoff.generateFromPanel",
@@ -84,19 +80,24 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "aiHandoff.expandAllFiles",
-        "title": "AI Handoff: Expand All",
-        "icon": "$(expand-all)"
-      },
-      {
-        "command": "aiHandoff.collapseAllFiles",
-        "title": "AI Handoff: Collapse All",
-        "icon": "$(collapse-all)"
-      },
-      {
         "command": "aiHandoff.clearSelection",
         "title": "Clear selection",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "aiHandoff.collapseAllTree",
+        "title": "Collapse all",
+        "icon": "$(collapse-all)"
+      },
+      {
+        "command": "aiHandoff.showSelectedOnlyOn",
+        "title": "Show selected files only",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "aiHandoff.showSelectedOnlyOff",
+        "title": "Show all files",
+        "icon": "$(list-flat)"
       },
       {
         "command": "aiHandoff.saveSelectionSet",
@@ -118,26 +119,48 @@
           "group": "7_modification@99"
         }
       ],
+      "editor/context": [
+        {
+          "command": "aiHandoff.generateFromEditor",
+          "group": "7_modification@99"
+        },
+        {
+          "command": "aiHandoff.generateFromSelection",
+          "when": "editorHasSelection",
+          "group": "7_modification@100"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "aiHandoff.generateFromEditor",
+          "group": "7_modification@99"
+        }
+      ],
       "view/title": [
         {
-          "command": "aiHandoff.refreshTree",
-          "when": "view == aiHandoff.fileTree",
+          "command": "aiHandoff.showSelectedOnlyOn",
+          "when": "view == aiHandoff.mainView && !aiHandoff.showSelectedOnly",
           "group": "navigation@1"
         },
         {
-          "command": "aiHandoff.collapseAllFiles",
-          "when": "view == aiHandoff.fileTree && !aiHandoff.treeAllCollapsed",
-          "group": "navigation@2"
+          "command": "aiHandoff.showSelectedOnlyOff",
+          "when": "view == aiHandoff.mainView && aiHandoff.showSelectedOnly",
+          "group": "navigation@1"
         },
         {
-          "command": "aiHandoff.expandAllFiles",
-          "when": "view == aiHandoff.fileTree && aiHandoff.treeAllCollapsed",
+          "command": "aiHandoff.collapseAllTree",
+          "when": "view == aiHandoff.mainView",
           "group": "navigation@2"
         },
         {
           "command": "aiHandoff.clearSelection",
-          "when": "view == aiHandoff.fileTree",
+          "when": "view == aiHandoff.mainView",
           "group": "navigation@3"
+        },
+        {
+          "command": "aiHandoff.refreshTree",
+          "when": "view == aiHandoff.mainView",
+          "group": "navigation@4"
         }
       ]
     },
@@ -228,6 +251,36 @@
           "type": "boolean",
           "default": false,
           "description": "Show the 'Custom Instructions' text area in the action panel."
+        },
+        "aiHandoff.gitDiffEnabledByDefault": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include a git diff section in the handoff by default."
+        },
+        "aiHandoff.gitDiffScope": {
+          "type": "string",
+          "enum": [
+            "working",
+            "staged",
+            "both"
+          ],
+          "enumDescriptions": [
+            "Uncommitted working-tree changes (git diff) (default)",
+            "Staged changes only (git diff --cached)",
+            "Both, shown as separate sections"
+          ],
+          "default": "working",
+          "description": "Default scope for the git diff included in the handoff."
+        },
+        "aiHandoff.searchSkipJunkDirs": {
+          "type": "boolean",
+          "default": true,
+          "description": "When building the sidebar search index, skip common junk paths (node_modules, .git, dist, build, lock files, etc. — the same defaults as the smart filter) so they don't clutter search results. Turn off to make everything searchable."
+        },
+        "aiHandoff.searchExcludeDirs": {
+          "type": "string",
+          "default": "",
+          "description": "Comma-separated directory glob patterns to additionally exclude from the sidebar search index (e.g. \"vendor,coverage,**/generated\"). Applied on top of searchSkipJunkDirs, not instead of it."
         }
       }
     }
@@ -259,6 +312,7 @@
     "@types/vscode": "^1.80.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
+    "@vscode/codicons": "^0.0.46-24",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.9.1",
     "c8": "^9.1.0",

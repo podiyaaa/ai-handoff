@@ -104,4 +104,60 @@ describe('readFile', () => {
       expect(result.file.sizeBytes).to.equal(0);
     }
   });
+
+  describe('lineRange', () => {
+    it('slices content down to just the requested (inclusive, 1-indexed) lines', async () => {
+      const p = path.join(tmpDir, 'multi.ts');
+      await fs.writeFile(p, ['line1', 'line2', 'line3', 'line4', 'line5'].join('\n'));
+      const result = await readFile({
+        relativePath: 'multi.ts',
+        absolutePath: p,
+        lineRange: { start: 2, end: 4 },
+      });
+      expect(result.kind).to.equal('text');
+      if (result.kind === 'text') {
+        expect(result.file.content).to.equal('line2\nline3\nline4');
+        expect(result.file.lineRange).to.deep.equal({ start: 2, end: 4 });
+      }
+    });
+
+    it('reports sizeBytes for the sliced content, not the whole file on disk', async () => {
+      const p = path.join(tmpDir, 'multi2.ts');
+      await fs.writeFile(p, ['line1', 'line2', 'line3'].join('\n'));
+      const result = await readFile({
+        relativePath: 'multi2.ts',
+        absolutePath: p,
+        lineRange: { start: 1, end: 1 },
+      });
+      expect(result.kind).to.equal('text');
+      if (result.kind === 'text') {
+        expect(result.file.sizeBytes).to.equal(5); // 'line1'.length, not the whole 17-byte file
+      }
+    });
+
+    it('clamps a range that runs past the end of the file', async () => {
+      const p = path.join(tmpDir, 'short.ts');
+      await fs.writeFile(p, 'line1\nline2');
+      const result = await readFile({
+        relativePath: 'short.ts',
+        absolutePath: p,
+        lineRange: { start: 1, end: 100 },
+      });
+      expect(result.kind).to.equal('text');
+      if (result.kind === 'text') {
+        expect(result.file.content).to.equal('line1\nline2');
+        expect(result.file.lineRange).to.deep.equal({ start: 1, end: 2 });
+      }
+    });
+
+    it('a file with no lineRange has no lineRange on the result', async () => {
+      const p = path.join(tmpDir, 'whole.ts');
+      await fs.writeFile(p, 'a\nb\nc');
+      const result = await readFile({ relativePath: 'whole.ts', absolutePath: p });
+      expect(result.kind).to.equal('text');
+      if (result.kind === 'text') {
+        expect(result.file.lineRange).to.be.undefined;
+      }
+    });
+  });
 });

@@ -30,9 +30,14 @@ describe('Commands are registered', () => {
 
   const expected = [
     'aiHandoff.generateFromExplorer',
+    'aiHandoff.generateFromEditor',
+    'aiHandoff.generateFromSelection',
     'aiHandoff.generateFromPanel',
     'aiHandoff.refreshTree',
     'aiHandoff.clearSelection',
+    'aiHandoff.collapseAllTree',
+    'aiHandoff.showSelectedOnlyOn',
+    'aiHandoff.showSelectedOnlyOff',
     'aiHandoff.saveSelectionSet',
     'aiHandoff.loadSelectionSet',
     'aiHandoff.deleteSelectionSet',
@@ -55,6 +60,8 @@ describe('Configuration', () => {
     expect(config.get<boolean>('smartFilter')).to.equal(true);
     expect(config.get<string>('selectionMemory')).to.equal('lastOnly');
     expect(config.get<string>('binaryHandling')).to.equal('placeholder');
+    expect(config.get<boolean>('gitDiffEnabledByDefault')).to.equal(false);
+    expect(config.get<string>('gitDiffScope')).to.equal('working');
   });
 });
 

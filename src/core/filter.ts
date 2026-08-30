@@ -78,6 +78,24 @@ export const DEFAULT_SMART_FILTER_PATTERNS: readonly string[] = [
 ];
 
 /**
+ * Parse `aiHandoff.searchExcludeDirs` — a comma-separated list of
+ * directory glob patterns (e.g. `"vendor,coverage,**\/generated"`) the
+ * user wants left out of the sidebar search index. Each entry is trimmed
+ * and normalized to a directory-only gitignore-style pattern (a trailing
+ * `/` is appended if missing) so `foo` excludes the *directory* `foo`, not
+ * an unrelated file that happens to share its name — matching this
+ * setting's stated purpose. Empty entries (blank/whitespace between two
+ * commas) are dropped.
+ */
+export function parseSearchExcludeDirs(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => (entry.endsWith('/') ? entry : `${entry}/`));
+}
+
+/**
  * File extensions treated as binary by extension alone.
  * These are skipped or placeholder'd without reading bytes.
  */

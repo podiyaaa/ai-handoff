@@ -5,6 +5,60 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-07-30 (pre-release)
+
+### Added
+
+- **Merged sidebar view** — the three separately-chromed views (Search, Files, Actions) are now a single "AI Handoff" view: search box, virtualized file tree, and the actions footer (format/diff/generate/instructions/bookmarks/skipped files) all in one place, reclaiming the vertical space VS Code wastes on a minimum height per stacked view. The file tree itself is a custom-rendered, windowed list — built to stay fast on very large projects (only what's actually visible is ever rendered, and only what's actually expanded is ever read from disk).
+- **Keyboard navigation for the file tree** — arrow keys move focus and scroll as needed, Home/End jump to the first/last visible row, Right/Left expand/collapse a directory, Enter opens a file (or expands/collapses a directory), Space toggles the focused row's checkbox. Full ARIA tree/treeitem semantics for screen readers.
+- **"Generate handoff from this file"** — right-click inside an editor, or right-click its tab, to generate a handoff from just that one file without touching the sidebar selection.
+- **"Generate handoff from selected lines"** — select some text in the editor, right-click, and generate a handoff containing just that excerpt (shown with its real line numbers, e.g. "lines 120-145", not renumbered from 1).
+- **"Show selected files only"** — a view-title toggle that filters the tree down to just what's currently selected (and its parent folders), useful for double-checking a large selection before generating.
+- **"Collapse all"** — a view-title button that collapses every expanded folder at once. No "Expand all" — expanding everything at once isn't safe on a huge project, since the tree is read lazily.
+- New setting `aiHandoff.searchExcludeDirs` — a comma-separated list of extra directory glob patterns (e.g. `vendor,coverage,**/generated`) to keep out of the sidebar search index, on top of the built-in defaults (`aiHandoff.searchSkipJunkDirs`).
+
+### Changed
+
+- **Selection persistence now applies to the merged view too** — `aiHandoff.selectionMemory` (auto-restoring your last selection) works the same way it always did, just against the new single view.
+- **"Unselect all" and "Refresh"** are now view-title icons next to the panel's title, alongside "Show selected only"/"Collapse all", instead of separate menu-only commands.
+- Plain-text sidebar search now matches the **file name only**, not the full path — searching "wo" no longer surfaces every file under a folder named `workspace`. `ext:`/`re:` search modes are unchanged and still match the full path.
+
+### Removed
+
+- The old three-view sidebar (native file tree, standalone search bar, standalone actions panel) is gone, replaced entirely by the merged view above.
+
+### Fixed
+
+- **Stats could lag behind the actual selection** after a rapid sequence of selecting/deselecting files or loading bookmarks — the displayed file count/size/token estimate could briefly (or persistently, until the next change) reflect an older selection than what the tree actually showed. Fixed by discarding stale, out-of-order background updates.
+- **Tree checkbox and expand-arrow theming** — checkboxes now use the theme's accent color instead of the browser default, and the focus ring around a checkbox only shows for keyboard navigation (Tab), not a mouse click. Expand/collapse arrows use real codicon glyphs instead of plain Unicode triangles.
+- **No workspace folder open** now shows an explanatory message in the tree area instead of silently rendering as blank.
+
+## [0.3.1] — 2026-07-28 (pre-release)
+
+### Added
+
+- **Background search index** — the sidebar search box now matches against an in-memory index built once by a background workspace walk, instead of re-reading directories from disk on every keystroke. Kept in sync automatically as files are created/deleted. By default the index skips the same junk paths as the smart filter (node_modules, .git, dist, build, lock files, etc.) so they don't clutter search results; new setting `aiHandoff.searchSkipJunkDirs` turns that off if you want everything searchable. Search still works immediately on a fresh window — it just falls back to the (slower) on-disk walk until the first background build finishes.
+
+### Changed
+
+- **Git diff scoped to the current file selection** — previously included changes across the whole workspace regardless of what was ticked in the tree; now only the diff for files you've actually selected is included, and it's empty with nothing selected.
+- **Nested git repo discovery now searches any depth** — a folder that isn't a repo itself used to be scanned only one level down for nested repos; it's now searched recursively (skipping junk paths, stopping at the first repo found per branch), so a "folder of folders of projects" opened as a single workspace root is covered too. Discovery is cached for the session and can be forced to re-scan via the sidebar's "Refresh" button.
+
+### Removed
+
+- **Expand All / Collapse All toggle** — the Files view title-bar button (added in 0.2.0) forced a full recursive walk of the entire tree, which hung on very large projects. Removed entirely rather than optimized, since there's no bounded way to "expand everything" on a tree that's read lazily.
+
+### Fixed
+
+- **Clearing the search box no longer force-expands the whole tree** — the auto-expand that reveals matching folders while a search is active was also firing once the box was cleared, which (with no filter left) meant a full, unbounded walk that opened every directory in the project. On a very large repo this was a serious hang. Auto-expand now only ever runs while a search query is active, so it stays bounded to the (small) match set; clearing the box leaves the tree's expand/collapse state as-is.
+- **General sidebar file tree lagginess** — every directory read (expanding a folder, refreshing, ticking a directory's checkbox to bulk-select it) used to hit disk fresh with no caching at all; now cached per-directory and invalidated only where a file actually changed. The file watcher also used to fire an immediate, unthrottled tree refresh on every single create/delete — a burst of filesystem activity (autosave, a linter writing cache files, git operations, an incremental build) meant one full refresh per event, each forcing VS Code to re-fetch every currently-expanded node. Now debounced (300ms) so a burst collapses into one refresh. The background search index's own rebuild also no longer fires a redundant full tree refresh when no search is active, since nothing displayed would have changed anyway.
+
+## [0.3.0] — 2026-07-27 (pre-release)
+
+### Added
+
+- **"Include git diff" in the action panel** — a checkbox next to the output format dropdown appends a git diff section to the handoff, with a scope dropdown: Working (unstaged), Staged only, or Both (rendered as separate labeled sections). Works additively alongside selected files, or on its own with nothing selected. Diffs are collected via the `git` CLI (no new dependency) across every repo in the workspace — each workspace folder is checked for its own repo, and folders that aren't repos themselves are scanned one level down for nested ones, so both true multi-root workspaces and a plain "folder of projects" opened as a single root are covered. When multiple repos contribute, each file's path is prefixed with its repo name to stay unambiguous. New settings: `aiHandoff.gitDiffEnabledByDefault` and `aiHandoff.gitDiffScope`.
+
 ## [0.2.0] — 2026-07-26
 
 ### Added

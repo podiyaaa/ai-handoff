@@ -13,8 +13,9 @@
  *   - Directory tree section
  */
 
-import type { IncludedFile, OutputFormat, SkippedFile } from './types';
+import type { DiffFileChange, GitDiffResult, HandoffStats, IncludedFile, OutputFormat, SkippedFile } from './types';
 import { formatBytes } from './filter';
+import { formatTokenCount } from './token-estimator';
 
 /**
  * Options for formatHandoff.
@@ -24,6 +25,8 @@ export interface FormatOptions {
   includeLineNumbers: boolean;
   /** Pre-built directory tree section string (e.g. from buildTreeForFormat). */
   treeSection?: string;
+  /** Pre-built git diff section string (e.g. from formatDiffSection). */
+  diffSection?: string;
   /** Optional custom instructions to prepend. */
   customInstructions?: string;
   /** Files that were filtered out, appended as a skipped section. */
@@ -34,7 +37,7 @@ export interface FormatOptions {
  * Format a complete handoff document.
  * Sorts included files by relative path before rendering.
  * Sections are separated by blank lines and ordered:
- *   instructions → tree → files → skipped
+ *   instructions → tree → diff → files → skipped
  */
 export function formatHandoff(included: IncludedFile[], options: FormatOptions): string {
   const sorted = [...included].sort((a, b) =>
@@ -51,6 +54,10 @@ export function formatHandoff(included: IncludedFile[], options: FormatOptions):
     parts.push(options.treeSection);
   }
 
+  if (options.diffSection) {
+    parts.push(options.diffSection);
+  }
+
   for (const file of sorted) {
     parts.push(formatFile(file, options));
   }
@@ -60,6 +67,22 @@ export function formatHandoff(included: IncludedFile[], options: FormatOptions):
   }
 
   return parts.join('\n\n');
+}
+
+/**
+ * Pre-format stats for display (so a renderer — the webview, previously
+ * also the old action-panel.ts — stays a dumb renderer rather than
+ * duplicating formatBytes()/formatTokenCount() logic itself).
+ */
+export function formatStatsForPanel(stats: HandoffStats): HandoffStats & {
+  sizeFormatted: string;
+  tokensFormatted: string;
+} {
+  return {
+    ...stats,
+    sizeFormatted: formatBytes(stats.totalSizeBytes),
+    tokensFormatted: formatTokenCount(stats.estimatedTokens),
+  };
 }
 
 /**
@@ -88,19 +111,25 @@ export function formatFile(file: IncludedFile, options: FormatOptions): string {
     file.content === null
       ? ''
       : options.includeLineNumbers
-        ? applyLineNumbers(file.content)
+        ? applyLineNumbers(file.content, file.lineRange?.start ?? 1)
         : file.content;
 
+  // A line-ranged file is an excerpt, not the whole file — say so, so
+  // whoever reads the handoff (human or AI) doesn't mistake it for complete.
+  const rangeNote = file.lineRange ? ` (lines ${file.lineRange.start}-${file.lineRange.end})` : '';
+
   switch (options.format) {
-    case 'xml':
-      return `<file path="${escapeXmlAttr(file.relativePath)}">\n${content}\n</file>`;
+    case 'xml': {
+      const linesAttr = file.lineRange ? ` lines="${file.lineRange.start}-${file.lineRange.end}"` : '';
+      return `<file path="${escapeXmlAttr(file.relativePath)}"${linesAttr}>\n${content}\n</file>`;
+    }
     case 'markdown': {
       const lang = getLanguageForPath(file.relativePath);
       const fence = chooseFence(content);
-      return [`### \`${file.relativePath}\``, '', `${fence}${lang}`, content, fence].join('\n');
+      return [`### \`${file.relativePath}\`${rangeNote}`, '', `${fence}${lang}`, content, fence].join('\n');
     }
     case 'plain':
-      return `--- ${file.relativePath} ---\n${content}`;
+      return `--- ${file.relativePath}${rangeNote} ---\n${content}`;
   }
 }
 
@@ -148,14 +177,81 @@ export function formatSkipped(skipped: SkippedFile[], format: OutputFormat): str
 }
 
 /**
- * Add line numbers to file content. Numbers are right-aligned to the width
- * of the largest line number for clean visual columns.
+ * Format the git diff section. Groups files by contributing repo (only
+ * shown when more than one repo contributed) and, within each repo, by
+ * staged/unstaged. Returns an empty string when there's nothing to render
+ * (no files, or the diff read failed — failures are surfaced via the panel,
+ * not embedded in the handoff text).
  */
-export function applyLineNumbers(content: string): string {
+export function formatDiffSection(diff: GitDiffResult, format: OutputFormat): string {
+  if (diff.error || diff.files.length === 0) {
+    return '';
+  }
+
+  const multiRepo = new Set(diff.files.map((f) => f.repoLabel)).size > 1;
+  const groups = groupDiffFiles(diff.files, multiRepo);
+  const body = groups
+    .map((g) => {
+      const files = g.files.map((f) => formatDiffFile(f, format)).join('\n\n');
+      return `${formatDiffGroupHeader(g.label, format)}\n\n${files}`;
+    })
+    .join('\n\n');
+
+  switch (format) {
+    case 'xml':
+      return `<git_diff>\n${body}\n</git_diff>`;
+    case 'markdown':
+      return `## Git diff\n\n${body}`;
+    case 'plain':
+      return `Git diff:\n\n${body}`;
+  }
+}
+
+/**
+ * Format a single file's diff hunk with the chosen format.
+ */
+export function formatDiffFile(file: DiffFileChange, format: OutputFormat): string {
+  switch (format) {
+    case 'xml': {
+      const attrs = [`path="${escapeXmlAttr(file.relativePath)}"`, `change="${file.changeType}"`];
+      if (file.oldPath) {
+        attrs.push(`from="${escapeXmlAttr(file.oldPath)}"`);
+      }
+      if (file.isBinary) {
+        attrs.push('binary="true"');
+      }
+      return `<diff_file ${attrs.join(' ')}>\n${file.patch}\n</diff_file>`;
+    }
+    case 'markdown': {
+      const fence = chooseFence(file.patch);
+      const renameNote = file.oldPath ? ` (renamed from \`${file.oldPath}\`)` : '';
+      return [
+        `##### \`${file.relativePath}\` — ${file.changeType}${renameNote}`,
+        '',
+        `${fence}diff`,
+        file.patch,
+        fence,
+      ].join('\n');
+    }
+    case 'plain': {
+      const renameNote = file.oldPath ? ` (renamed from ${file.oldPath})` : '';
+      return `--- ${file.relativePath} [${file.changeType}${renameNote}] ---\n${file.patch}`;
+    }
+  }
+}
+
+/**
+ * Add line numbers to file content. Numbers are right-aligned to the width
+ * of the largest line number for clean visual columns. `startLine` lets a
+ * sliced excerpt (see `IncludedFile.lineRange`) show the *original* file's
+ * line numbers instead of restarting at 1 — otherwise a snippet from lines
+ * 400-420 would confusingly display as lines 1-21.
+ */
+export function applyLineNumbers(content: string, startLine = 1): string {
   const lines = content.split('\n');
-  const width = String(lines.length).length;
+  const width = String(startLine + lines.length - 1).length;
   return lines
-    .map((line, idx) => `${String(idx + 1).padStart(width, ' ')}  ${line}`)
+    .map((line, idx) => `${String(startLine + idx).padStart(width, ' ')}  ${line}`)
     .join('\n');
 }
 
@@ -225,6 +321,53 @@ function groupSkippedByReason(skipped: SkippedFile[]): Map<string, SkippedFile[]
     map.set(f.reason, arr);
   }
   return map;
+}
+
+interface DiffGroup {
+  label: string;
+  files: DiffFileChange[];
+}
+
+/**
+ * Group diff files by contributing repo, then by staged/unstaged within
+ * each repo. When multiRepo, each file's displayed path is prefixed with
+ * its repo label so multiple repos' diffs stay unambiguous.
+ */
+function groupDiffFiles(files: DiffFileChange[], multiRepo: boolean): DiffGroup[] {
+  const byRepo = new Map<string, DiffFileChange[]>();
+  for (const f of files) {
+    const arr = byRepo.get(f.repoLabel) ?? [];
+    arr.push(f);
+    byRepo.set(f.repoLabel, arr);
+  }
+
+  const groups: DiffGroup[] = [];
+  for (const [repoLabel, repoFiles] of byRepo) {
+    const displayFiles = multiRepo
+      ? repoFiles.map((f) => ({ ...f, relativePath: `${repoLabel}/${f.relativePath}` }))
+      : repoFiles;
+    const labelPrefix = multiRepo ? `${repoLabel} — ` : '';
+    const unstaged = displayFiles.filter((f) => !f.staged);
+    const staged = displayFiles.filter((f) => f.staged);
+    if (unstaged.length > 0) {
+      groups.push({ label: `${labelPrefix}Unstaged changes`, files: unstaged });
+    }
+    if (staged.length > 0) {
+      groups.push({ label: `${labelPrefix}Staged changes`, files: staged });
+    }
+  }
+  return groups;
+}
+
+function formatDiffGroupHeader(label: string, format: OutputFormat): string {
+  switch (format) {
+    case 'xml':
+      return `<!-- ${label} -->`;
+    case 'markdown':
+      return `#### ${label}`;
+    case 'plain':
+      return `-- ${label} --`;
+  }
 }
 
 /**

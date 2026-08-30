@@ -15,17 +15,19 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { FilterChain, formatBytes } from '../core/filter';
-import { formatHandoff } from '../core/formatter';
+import { formatDiffSection, formatHandoff } from '../core/formatter';
 import { estimateTokens } from '../core/token-estimator';
 import { buildTreeForFormat } from '../core/tree-builder';
 import type {
   HandoffOptions,
   HandoffResult,
   IncludedFile,
+  LineRange,
   SelectedFile,
   SkippedFile,
 } from '../core/types';
 import { readFile } from './file-reader';
+import { readGitDiffForWorkspace, RepoRootCache } from './git-diff-reader';
 
 /**
  * Read .gitignore from the workspace root (best-effort).
@@ -48,7 +50,11 @@ async function expandToFiles(selected: SelectedFile[]): Promise<SelectedFile[]> 
   const seen = new Set<string>();
   const out: SelectedFile[] = [];
 
-  async function processPath(relativePath: string, absolutePath: string): Promise<void> {
+  async function processPath(
+    relativePath: string,
+    absolutePath: string,
+    lineRange: LineRange | undefined,
+  ): Promise<void> {
     if (seen.has(relativePath)) {
       return;
     }
@@ -58,7 +64,7 @@ async function expandToFiles(selected: SelectedFile[]): Promise<SelectedFile[]> 
     } catch {
       // Stat failed — pass through to the main loop which will record the error.
       seen.add(relativePath);
-      out.push({ relativePath, absolutePath });
+      out.push({ relativePath, absolutePath, lineRange });
       return;
     }
     if (stat.isDirectory()) {
@@ -75,17 +81,19 @@ async function expandToFiles(selected: SelectedFile[]): Promise<SelectedFile[]> 
         // Build child relative path from parent's relative path so this works
         // correctly for files from any workspace folder, not just the primary one.
         const childRel = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-        await processPath(childRel, childAbs);
+        // lineRange never applies to a directory's expanded children — it's
+        // only meaningful for the single file it was actually captured on.
+        await processPath(childRel, childAbs, undefined);
       }
     } else if (stat.isFile()) {
       seen.add(relativePath);
-      out.push({ relativePath, absolutePath });
+      out.push({ relativePath, absolutePath, lineRange });
     }
     // Symlinks to neither file nor dir are silently dropped.
   }
 
   for (const sel of selected) {
-    await processPath(sel.relativePath, sel.absolutePath);
+    await processPath(sel.relativePath, sel.absolutePath, sel.lineRange);
   }
   return out;
 }
@@ -97,6 +105,8 @@ export async function generateHandoff(
   selected: SelectedFile[],
   options: HandoffOptions,
   workspaceRoot: string,
+  workspaceFolders?: { name: string; path: string }[],
+  repoRootCache?: RepoRootCache,
 ): Promise<HandoffResult> {
   const gitignoreContent = options.respectGitignore
     ? await readGitignore(workspaceRoot)
@@ -229,10 +239,51 @@ export async function generateHandoff(
     options.format,
     { rootLabel },
   );
+
+  let diff = options.gitDiff?.enabled
+    ? await readGitDiffForWorkspace(
+        workspaceFolders ?? [{ name: path.basename(workspaceRoot) || 'workspace', path: workspaceRoot }],
+        options.gitDiff.scope,
+        repoRootCache,
+      )
+    : undefined;
+  if (diff && !diff.error) {
+    // Scope the diff to the files the user actually selected — otherwise
+    // enabling git diff pulls in changes across the whole repo regardless of
+    // what's ticked in the tree. Match on resolved absolute path rather than
+    // relativePath text, since the diff's path is repo-root-relative while a
+    // selected file's relativePath is workspace-folder-relative (and may
+    // carry a multi-root folder-name prefix) — these only reliably agree
+    // once both are resolved to a real filesystem path. `repoRoot` comes
+    // from `git rev-parse --show-toplevel`, which resolves symlinks, so the
+    // selected side must be realpath'd too or the two will disagree on
+    // systems where the workspace path itself is a symlink (e.g. macOS's
+    // /tmp -> /private/tmp).
+    const selectedAbsolutePaths = new Set(
+      await Promise.all(
+        expanded.map(async (f) => {
+          try {
+            return await fs.realpath(f.absolutePath);
+          } catch {
+            return path.resolve(f.absolutePath);
+          }
+        }),
+      ),
+    );
+    diff = {
+      ...diff,
+      files: diff.files.filter((f) =>
+        selectedAbsolutePaths.has(path.resolve(f.repoRoot, f.relativePath)),
+      ),
+    };
+  }
+  const diffSection = diff ? formatDiffSection(diff, options.format) : undefined;
+
   const text = formatHandoff(displayFiles, {
     format: options.format,
     includeLineNumbers: options.includeLineNumbers,
     treeSection,
+    diffSection,
     customInstructions: options.customInstructions,
     skippedFiles: skipped,
   });
@@ -244,10 +295,12 @@ export async function generateHandoff(
     text,
     included,
     skipped,
+    diff,
     stats: {
       fileCount: included.length,
       totalSizeBytes,
       estimatedTokens,
+      diffFileCount: diff?.files.length ?? 0,
     },
   };
 }

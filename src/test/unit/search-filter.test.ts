@@ -58,10 +58,20 @@ describe('parseSearchQuery', () => {
 });
 
 describe('matchesSearchQuery', () => {
-  it('name mode: case-insensitive substring match against the relative path', () => {
-    const { query } = parseSearchQuery('Auth');
+  it('name mode: case-insensitive substring match against the file name only', () => {
+    const { query } = parseSearchQuery('Login');
     expect(matchesSearchQuery('src/auth/login.ts', 'login.ts', query!)).to.be.true;
     expect(matchesSearchQuery('src/payments/charge.ts', 'charge.ts', query!)).to.be.false;
+  });
+
+  it('name mode: does NOT match on an ancestor folder name alone — only the file name counts', () => {
+    // A folder literally named "auth" must not make every file under it
+    // match a search for "auth" unless the file's own name also contains it
+    // — matching the path made short queries noisy (e.g. "wo" matching
+    // every file under a workspace/ folder regardless of the file's name).
+    const { query } = parseSearchQuery('auth');
+    expect(matchesSearchQuery('src/auth/login.ts', 'login.ts', query!)).to.be.false;
+    expect(matchesSearchQuery('src/auth/auth-guard.ts', 'auth-guard.ts', query!)).to.be.true;
   });
 
   it('extension mode: matches any extension in the list, case-insensitively', () => {
