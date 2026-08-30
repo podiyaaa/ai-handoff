@@ -5,6 +5,13 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-08-31 (pre-release)
+
+### Added
+
+- **Base64-encoded output** — a checkbox next to the output-format picker base64-encodes the final handoff text on top of whichever format (XML/Markdown/plain) is already chosen, applied as a post-processing step rather than a new format. Stats (file count/size/token estimate) reflect the real content, not the ~33% larger encoded size. Also available as two new right-click commands — `AI Handoff: Generate from selection (Base64)` and `AI Handoff: Generate handoff from this file (Base64)` — that force it on without touching the sidebar's live settings.
+- **JS/TS import-following selection** — two new actions-footer toggles, "Look for imports (JS/TS)" and "Follow imports recursively" (recursive by default): when enabled, checking a JS/TS file's checkbox in the tree also auto-selects the files it imports. Resolution covers relative (`./`, `../`) imports and `tsconfig.json`/`jsconfig.json` path aliases (`compilerOptions.paths`/`baseUrl`, including a local `extends` chain) — bare package imports are never resolved onto `node_modules`. Also available as a "Select with Imports" right-click command (Explorer/editor context, JS/TS files only) that applies the same resolution regardless of the sidebar toggle state.
+
 ## [0.4.0] — 2026-08-30
 
 ### Added
