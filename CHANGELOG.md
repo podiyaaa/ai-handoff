@@ -5,6 +5,12 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] — 2026-08-31 (pre-release)
+
+### Added
+
+- **"Generate handoff with imports (Base64)"** — right-click command alongside "Generate handoff with imports" that does the same (a JS/TS file plus its direct first-level imports) but base64-encodes the output, for parity with the existing "Generate from selection (Base64)" / "Generate handoff from this file (Base64)" commands.
+
 ## [0.5.1] — 2026-08-31 (pre-release)
 
 ### Fixed

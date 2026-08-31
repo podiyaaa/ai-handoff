@@ -2,7 +2,7 @@
   "name": "ai-handoff",
   "displayName": "AI Handoff",
   "description": "Select multiple files and generate a clean, structured handoff (directory tree + file contents) ready to paste into any AI chat — Claude, ChatGPT, Gemini, and more.",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "RavinduKanchana",
   "engines": {
     "vscode": "^1.80.0"
@@ -87,6 +87,10 @@
         "title": "AI Handoff: Generate handoff with imports"
       },
       {
+        "command": "aiHandoff.generateWithImportsBase64",
+        "title": "AI Handoff: Generate handoff with imports (Base64)"
+      },
+      {
         "command": "aiHandoff.refreshTree",
         "title": "Refresh",
         "icon": "$(refresh)"
@@ -138,6 +142,11 @@
           "command": "aiHandoff.generateWithImports",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
           "group": "7_modification@101"
+        },
+        {
+          "command": "aiHandoff.generateWithImportsBase64",
+          "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
+          "group": "7_modification@102"
         }
       ],
       "editor/context": [
@@ -158,6 +167,11 @@
           "command": "aiHandoff.generateWithImports",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
           "group": "7_modification@102"
+        },
+        {
+          "command": "aiHandoff.generateWithImportsBase64",
+          "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
+          "group": "7_modification@103"
         }
       ],
       "editor/title/context": [
@@ -173,6 +187,11 @@
           "command": "aiHandoff.generateWithImports",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
           "group": "7_modification@101"
+        },
+        {
+          "command": "aiHandoff.generateWithImportsBase64",
+          "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
+          "group": "7_modification@102"
         }
       ],
       "view/title": [
