@@ -65,7 +65,7 @@ export interface PanelState {
   base64Encode: boolean;
   /** "Look for imports" — whether checking a JS/TS file's checkbox also auto-selects its imports. */
   lookForImports: boolean;
-  /** Direct imports only (false) vs. the whole transitive import graph (true, the default) — also governs the "Select with Imports" right-click action regardless of `lookForImports`. */
+  /** Direct imports only (false) vs. the whole transitive import graph (true, the default). Governs only the automatic tree-checkbox cascade — the standalone "Generate handoff with imports" right-click command always uses direct imports only, regardless of this setting. */
   importsRecursive: boolean;
   /** False when no workspace folder is open — the tree shows an explanatory empty state instead of a silently blank list. */
   hasWorkspace: boolean;

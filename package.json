@@ -83,8 +83,8 @@
         "icon": "$(rocket)"
       },
       {
-        "command": "aiHandoff.selectWithImports",
-        "title": "AI Handoff: Select with imports"
+        "command": "aiHandoff.generateWithImports",
+        "title": "AI Handoff: Generate handoff with imports"
       },
       {
         "command": "aiHandoff.refreshTree",
@@ -135,7 +135,7 @@
           "group": "7_modification@100"
         },
         {
-          "command": "aiHandoff.selectWithImports",
+          "command": "aiHandoff.generateWithImports",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
           "group": "7_modification@101"
         }
@@ -155,7 +155,7 @@
           "group": "7_modification@101"
         },
         {
-          "command": "aiHandoff.selectWithImports",
+          "command": "aiHandoff.generateWithImports",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
           "group": "7_modification@102"
         }
@@ -170,7 +170,7 @@
           "group": "7_modification@100"
         },
         {
-          "command": "aiHandoff.selectWithImports",
+          "command": "aiHandoff.generateWithImports",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
           "group": "7_modification@101"
         }

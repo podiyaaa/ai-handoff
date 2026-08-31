@@ -198,25 +198,39 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('aiHandoff.generateFromPanel', async () => {
       await handoffPanel.runGenerate();
     }),
-    vscode.commands.registerCommand('aiHandoff.selectWithImports', async (...args: unknown[]) => {
+    vscode.commands.registerCommand('aiHandoff.generateWithImports', async (...args: unknown[]) => {
       const files = collectExplorerFiles(args);
       if (files.length === 0) {
-        vscode.window.showWarningMessage('AI Handoff: no file to select imports from.');
+        vscode.window.showWarningMessage('AI Handoff: no file to generate from.');
         return;
       }
-      const recursive = fileTreeModel.getImportsRecursive();
-      const before = new Set(fileTreeModel.getSelection());
+      // Standalone, like generateFromExplorer/generateFromEditor — never
+      // touches the sidebar tree's selection. Always first-level imports
+      // only: this command doesn't read the footer's "Follow imports
+      // recursively" toggle, which governs only the automatic
+      // tree-checkbox cascade (FileTreeModel.toggleFile).
+      const seen = new Set<string>();
+      const toGenerate: SelectedFile[] = [];
       for (const file of files) {
-        const closure = await fileTreeModel.resolveImportClosure(file.relativePath, recursive);
-        await fileTreeModel.toggleFile(file.relativePath, true);
+        if (seen.has(file.relativePath)) {
+          continue;
+        }
+        seen.add(file.relativePath);
+        toGenerate.push(file);
+        const closure = await fileTreeModel.resolveImportClosure(file.relativePath, false);
         for (const relativePath of closure) {
-          await fileTreeModel.toggleFile(relativePath, true);
+          if (seen.has(relativePath)) {
+            continue;
+          }
+          seen.add(relativePath);
+          const absolutePath = fileTreeModel.resolveAbsolutePath(relativePath);
+          if (absolutePath) {
+            toGenerate.push({ relativePath, absolutePath });
+          }
         }
       }
-      const addedCount = fileTreeModel.getSelection().filter((p) => !before.has(p)).length;
-      vscode.window.showInformationMessage(
-        `AI Handoff: added ${addedCount} file(s) (including imports) to the selection.`,
-      );
+      const root = workspaceRoot ?? toGenerate[0].absolutePath;
+      await doGenerateAndDispatch(toGenerate, root, adHocRepoRootCache);
     }),
     vscode.commands.registerCommand('aiHandoff.refreshTree', () => {
       handoffPanel.refresh();
