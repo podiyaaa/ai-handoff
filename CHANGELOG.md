@@ -5,6 +5,12 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-08-31 (pre-release)
+
+### Fixed
+
+- **"Generate handoff with imports"** (renamed from "Select with Imports") is now a standalone action, like "Generate handoff from this file" — it generates immediately from a JS/TS file plus its direct (first-level) imports, rather than checking boxes in the sidebar tree. Previously it silently reported "added 0 file(s)" whenever the file or its imports happened to already be selected, even though import resolution itself was working correctly. Always resolves first-level imports only now, regardless of the sidebar's "Follow imports recursively" toggle — that toggle governs only the automatic tree-checkbox cascade.
+
 ## [0.5.0] — 2026-08-31 (pre-release)
 
 ### Added
