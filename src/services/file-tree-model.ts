@@ -476,22 +476,66 @@ export class FileTreeModel implements vscode.Disposable {
 
   // -- JS/TS import-following selection -------------------------------------
 
-  /** Toggle "look for imports" — whether ticking a JS/TS file's checkbox also selects its imports. */
-  setLookForImports(value: boolean): void {
+  /**
+   * Toggle "look for imports" — whether ticking a JS/TS file's checkbox also
+   * selects its imports. Turning it on retroactively cascades imports for
+   * every JS/TS file already selected, so the result doesn't depend on
+   * whether you checked the file or flipped this setting first.
+   */
+  async setLookForImports(value: boolean): Promise<void> {
+    const turningOn = value && !this.lookForImports;
     this.lookForImports = value;
+    if (turningOn) {
+      await this.applyImportCascadeToSelection();
+    }
   }
 
   getLookForImports(): boolean {
     return this.lookForImports;
   }
 
-  /** Toggle whether the import cascade follows the whole transitive graph (true) or just direct imports (false). */
-  setImportsRecursive(value: boolean): void {
+  /**
+   * Toggle whether the import cascade follows the whole transitive graph
+   * (true) or just direct imports (false). While "look for imports" is on,
+   * changing this retroactively re-applies the cascade at the new depth to
+   * every JS/TS file already selected (only additive — switching back to
+   * direct-only never un-selects files a wider pass already pulled in).
+   */
+  async setImportsRecursive(value: boolean): Promise<void> {
+    const changed = value !== this.importsRecursive;
     this.importsRecursive = value;
+    if (changed && this.lookForImports) {
+      await this.applyImportCascadeToSelection();
+    }
   }
 
   getImportsRecursive(): boolean {
     return this.importsRecursive;
+  }
+
+  /**
+   * Cascade imports (per the current lookForImports/importsRecursive
+   * settings) for every JS/TS file already in `selected`. Shared by
+   * `setLookForImports`/`setImportsRecursive` so toggling either one applies
+   * retroactively instead of only affecting future `toggleFile` calls.
+   */
+  private async applyImportCascadeToSelection(): Promise<void> {
+    const jsTsSelected = Array.from(this.selected).filter((p) => isJsOrTsFile(p));
+    let added = false;
+    for (const relativePath of jsTsSelected) {
+      const closure = await this.resolveImportClosure(relativePath, this.importsRecursive);
+      for (const resolved of closure) {
+        if (!this.selected.has(resolved)) {
+          this.selected.add(resolved);
+          added = true;
+        }
+      }
+    }
+    if (added) {
+      this.recomputeSelectedAncestors();
+      this._onDidChangeTree.fire();
+      this._onDidChangeSelection.fire(this.getSelection());
+    }
   }
 
   /**

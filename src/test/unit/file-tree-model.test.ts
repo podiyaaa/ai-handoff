@@ -714,7 +714,7 @@ describe('FileTreeModel — toggleFile import cascade', () => {
   });
 
   it('cascades the full transitive closure when on (recursive is the default)', async () => {
-    model.setLookForImports(true);
+    await model.setLookForImports(true);
     await model.toggleFile('src/entry.ts', true);
     expect(model.getSelection().sort()).to.deep.equal(
       ['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts', 'src/deep.ts'].sort(),
@@ -722,21 +722,21 @@ describe('FileTreeModel — toggleFile import cascade', () => {
   });
 
   it('cascades only direct imports when importsRecursive is turned off', async () => {
-    model.setLookForImports(true);
-    model.setImportsRecursive(false);
+    await model.setLookForImports(true);
+    await model.setImportsRecursive(false);
     await model.toggleFile('src/entry.ts', true);
     expect(model.getSelection().sort()).to.deep.equal(['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts'].sort());
   });
 
   it('does not cascade for a non-JS/TS file even when "look for imports" is on', async () => {
     await fs.writeFile(path.join(root, 'README.md'), '# readme');
-    model.setLookForImports(true);
+    await model.setLookForImports(true);
     await model.toggleFile('README.md', true);
     expect(model.getSelection()).to.deep.equal(['README.md']);
   });
 
   it('fires onDidChangeTree/onDidChangeSelection exactly once for the whole cascade, not once per resolved file', async () => {
-    model.setLookForImports(true);
+    await model.setLookForImports(true);
     let treeFires = 0;
     let selectionFires = 0;
     model.onDidChangeTree(() => treeFires++);
@@ -746,5 +746,41 @@ describe('FileTreeModel — toggleFile import cascade', () => {
 
     expect(treeFires).to.equal(1);
     expect(selectionFires).to.equal(1);
+  });
+
+  it('retroactively cascades already-selected JS/TS files when "look for imports" is turned on afterward', async () => {
+    // Select the file BEFORE enabling the toggle — order shouldn't matter.
+    await model.toggleFile('src/entry.ts', true);
+    expect(model.getSelection()).to.deep.equal(['src/entry.ts']);
+
+    await model.setLookForImports(true);
+    expect(model.getSelection().sort()).to.deep.equal(
+      ['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts', 'src/deep.ts'].sort(),
+    );
+  });
+
+  it('retroactively widens an already-cascaded selection when importsRecursive is turned on afterward', async () => {
+    await model.setLookForImports(true);
+    await model.setImportsRecursive(false);
+    await model.toggleFile('src/entry.ts', true);
+    expect(model.getSelection().sort()).to.deep.equal(['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts'].sort());
+
+    await model.setImportsRecursive(true);
+    expect(model.getSelection().sort()).to.deep.equal(
+      ['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts', 'src/deep.ts'].sort(),
+    );
+  });
+
+  it('does not re-fire selection/tree events when toggling a setting has nothing new to cascade', async () => {
+    let treeFires = 0;
+    let selectionFires = 0;
+    model.onDidChangeTree(() => treeFires++);
+    model.onDidChangeSelection(() => selectionFires++);
+
+    // Nothing selected yet, so turning this on has nothing to cascade.
+    await model.setLookForImports(true);
+
+    expect(treeFires).to.equal(0);
+    expect(selectionFires).to.equal(0);
   });
 });
