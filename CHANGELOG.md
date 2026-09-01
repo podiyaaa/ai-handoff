@@ -5,6 +5,12 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] — 2026-09-02 (pre-release)
+
+### Changed
+
+- **Narrowing the import-cascade settings now prunes the selection, not just widens it.** Turning "Follow imports recursively" back off, or turning "Look for imports" off entirely, now removes files the cascade added that are no longer justified at the new settings — but never a file you checked directly yourself, and never a file still legitimately reachable through some *other* selected file's imports. (Previously, narrowing never removed anything — once a file was cascaded in, it stayed no matter what.)
+
 ## [0.5.4] — 2026-09-01 (pre-release)
 
 ### Changed
