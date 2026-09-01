@@ -864,7 +864,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         <input type="checkbox" id="look-for-imports" />
         <label for="look-for-imports">Look for imports (JS/TS)</label>
       </div>
-      <div class="checkbox-row">
+      <div class="checkbox-row hidden" id="imports-recursive-row">
         <input type="checkbox" id="imports-recursive" checked />
         <label for="imports-recursive">Follow imports recursively</label>
       </div>
