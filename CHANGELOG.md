@@ -5,6 +5,12 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] — 2026-09-01 (pre-release)
+
+### Fixed
+
+- **"Look for imports" and "Follow imports recursively" now apply retroactively.** Previously, selecting a file first and then turning "Look for imports" on did nothing to it — the setting only affected files checked *after* it was enabled. Turning either toggle on (or widening "Follow imports recursively" from off to on) now immediately cascades imports for whatever JS/TS files are already selected, so the result no longer depends on which order you did things in.
+
 ## [0.5.2] — 2026-08-31 (pre-release)
 
 ### Added
