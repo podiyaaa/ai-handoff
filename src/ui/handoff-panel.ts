@@ -237,6 +237,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       customInstructions: this.getConfig('showCustomInstructions', false) ? this.currentInstructions : undefined,
       overriddenPaths: Array.from(this.overriddenPaths),
       gitDiff: { enabled: this.gitDiffEnabled, scope: this.diffScope },
+      accurateMultiRootPaths: this.getConfig('accurateMultiRootPaths', false),
     };
   }
 

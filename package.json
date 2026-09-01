@@ -281,6 +281,11 @@
           "type": "string",
           "default": "",
           "description": "Comma-separated directory glob patterns to additionally exclude from the sidebar search index (e.g. \"vendor,coverage,**/generated\"). Applied on top of searchSkipJunkDirs, not instead of it."
+        },
+        "aiHandoff.accurateMultiRootPaths": {
+          "type": "boolean",
+          "default": false,
+          "description": "EXPERIMENTAL — in a multi-root workspace, resolve each selected file's owning folder, its own .gitignore, and the tree's root label from the real workspace folder list, instead of always assuming the first folder. Fixes incorrect labeling/filtering when generating a handoff from a non-primary folder. Off by default while this is being validated."
         }
       }
     }

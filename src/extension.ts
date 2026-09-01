@@ -338,6 +338,7 @@ function getAdHocHandoffOptions(): HandoffOptions {
       enabled: getConfig('gitDiffEnabledByDefault', false),
       scope: getConfig<DiffScope>('gitDiffScope', 'working'),
     },
+    accurateMultiRootPaths: getConfig('accurateMultiRootPaths', false),
   };
 }
 

@@ -41,6 +41,34 @@ export async function readGitignore(workspaceRoot: string): Promise<string | und
 }
 
 /**
+ * Find which workspace folder (if any) an absolute path actually lives
+ * under — the folder whose path is an ancestor of (or equal to) it. If
+ * folders are ever nested (unusual but not impossible), the most specific
+ * (longest path) match wins.
+ *
+ * Used only behind `HandoffOptions.accurateMultiRootPaths` (see
+ * `generateHandoff()`) to determine each file's *real* owning folder,
+ * gitignore, and root label directly from the authoritative workspace
+ * folder list — never by guessing from `relativePath`'s shape, which
+ * differs by entry point (the sidebar prefixes multi-root paths with the
+ * folder name; ad hoc Explorer/editor commands never do).
+ */
+export function findOwningFolder(
+  absolutePath: string,
+  folders: { name: string; path: string }[],
+): { name: string; path: string } | undefined {
+  let best: { name: string; path: string } | undefined;
+  for (const folder of folders) {
+    const rel = path.relative(folder.path, absolutePath);
+    const isInside = rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    if (isInside && (!best || folder.path.length > best.path.length)) {
+      best = folder;
+    }
+  }
+  return best;
+}
+
+/**
  * Expand any directory paths in the selection to their constituent files,
  * recursing into sub-directories. Files already present in the list are
  * kept as-is. Duplicate paths (e.g. a dir AND one of its files) are
@@ -108,22 +136,62 @@ export async function generateHandoff(
   workspaceFolders?: { name: string; path: string }[],
   repoRootCache?: RepoRootCache,
 ): Promise<HandoffResult> {
-  const gitignoreContent = options.respectGitignore
-    ? await readGitignore(workspaceRoot)
-    : undefined;
-
-  const chain = new FilterChain({
-    smartFilter: options.smartFilter,
-    respectGitignore: options.respectGitignore,
-    gitignoreContent,
-    customIgnorePatterns: options.customIgnorePatterns,
-    maxFileSizeKB: options.maxFileSizeKB,
-  });
-
   // Expand any directory paths (e.g. from Explorer right-click) to their
   // individual files before running the filter pipeline. Deduplicated by
   // relative path so selecting both a folder and one of its files is safe.
   const expanded = await expandToFiles(selected);
+
+  // -- Filter setup ----------------------------------------------------
+  // Behind HandoffOptions.accurateMultiRootPaths (default off): the legacy
+  // path below is completely unchanged. The flagged path resolves each
+  // file's *real* owning folder from the authoritative workspace folder
+  // list and builds one FilterChain per distinct folder actually involved
+  // (each with that folder's own .gitignore) — fixing both wrong-folder
+  // gitignore matching and (further down) the wrong root label, for a
+  // selection that isn't from the first workspace folder. See
+  // findOwningFolder()'s doc comment for why this can't be inferred from
+  // relativePath alone.
+  const accurate = options.accurateMultiRootPaths === true;
+  let legacyChain: FilterChain | undefined;
+  let folders: { name: string; path: string }[] | undefined;
+  let folderChains: Map<string, FilterChain> | undefined;
+
+  if (accurate) {
+    folders =
+      workspaceFolders && workspaceFolders.length > 0
+        ? workspaceFolders
+        : [{ name: path.basename(workspaceRoot) || 'workspace', path: workspaceRoot }];
+    folderChains = new Map();
+    const involvedKeys = new Set(
+      expanded.map((f) => findOwningFolder(f.absolutePath, folders!)?.path ?? f.absolutePath),
+    );
+    for (const key of involvedKeys) {
+      const owner = folders.find((f) => f.path === key);
+      const gitignoreContent =
+        options.respectGitignore && owner ? await readGitignore(owner.path) : undefined;
+      folderChains.set(
+        key,
+        new FilterChain({
+          smartFilter: options.smartFilter,
+          respectGitignore: options.respectGitignore,
+          gitignoreContent,
+          customIgnorePatterns: options.customIgnorePatterns,
+          maxFileSizeKB: options.maxFileSizeKB,
+        }),
+      );
+    }
+  } else {
+    const gitignoreContent = options.respectGitignore
+      ? await readGitignore(workspaceRoot)
+      : undefined;
+    legacyChain = new FilterChain({
+      smartFilter: options.smartFilter,
+      respectGitignore: options.respectGitignore,
+      gitignoreContent,
+      customIgnorePatterns: options.customIgnorePatterns,
+      maxFileSizeKB: options.maxFileSizeKB,
+    });
+  }
 
   const overrides = new Set(options.overriddenPaths ?? []);
   const included: IncludedFile[] = [];
@@ -155,15 +223,33 @@ export async function generateHandoff(
       continue;
     }
 
+    // Only meaningful when `accurate` is true — computed once, reused for
+    // both the filter decision and (below) the file actually read.
+    let owner: { name: string; path: string } | undefined;
+    let folderRelativePath = sel.relativePath;
+    let chain: FilterChain;
+    if (accurate) {
+      owner = findOwningFolder(sel.absolutePath, folders!);
+      folderRelativePath = owner
+        ? path.relative(owner.path, sel.absolutePath).split(path.sep).join('/')
+        : sel.relativePath;
+      chain = folderChains!.get(owner?.path ?? sel.absolutePath)!;
+    } else {
+      chain = legacyChain!;
+    }
+
     const decision = chain.decide({
-      relativePath: sel.relativePath,
+      relativePath: folderRelativePath,
       sizeBytes,
+      // Overrides are matched against the *original, as-passed-in* path —
+      // that's the format the caller (e.g. HandoffPanelProvider) actually
+      // recorded it in, independent of the folder-relative recomputation above.
       isOverridden: overrides.has(sel.relativePath),
     });
 
     if (!decision.include) {
       skipped.push({
-        relativePath: sel.relativePath,
+        relativePath: accurate ? folderRelativePath : sel.relativePath,
         absolutePath: sel.absolutePath,
         reason: decision.reason,
         detail: decision.detail,
@@ -172,10 +258,10 @@ export async function generateHandoff(
       continue;
     }
 
-    const read = await readFile(sel);
+    const read = await readFile(accurate ? { ...sel, relativePath: folderRelativePath } : sel);
     if (read.kind === 'error') {
       skipped.push({
-        relativePath: sel.relativePath,
+        relativePath: accurate ? folderRelativePath : sel.relativePath,
         absolutePath: sel.absolutePath,
         reason: 'unreadable',
         detail: read.error,
@@ -186,7 +272,7 @@ export async function generateHandoff(
 
     if (read.kind === 'binary' && options.binaryHandling === 'skip') {
       skipped.push({
-        relativePath: sel.relativePath,
+        relativePath: accurate ? folderRelativePath : sel.relativePath,
         absolutePath: sel.absolutePath,
         reason: 'binary-skip',
         detail: `binary file (${formatBytes(read.file.sizeBytes)})`,
@@ -205,35 +291,58 @@ export async function generateHandoff(
     a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0,
   );
 
-  // Detect multi-root: infer each file's workspace folder root from its
-  // absolutePath + relativePath, then check whether more than one root is
-  // present among the included files.
-  //
-  // For a file { relativePath: 'src/index.ts', absolutePath: '/root/src/index.ts' }
-  // the folder root is path.resolve('/root/src/index.ts', '../../') = '/root'.
-  function inferFolderRoot(f: { relativePath: string; absolutePath: string }): string {
-    const depth = f.relativePath.split('/').length;
-    return path.resolve(f.absolutePath, '../'.repeat(depth));
+  let multiRoot: boolean;
+  let displayFiles: IncludedFile[];
+  let rootLabel: string;
+
+  if (accurate) {
+    // Same semantics as the legacy path below (multi-root is decided from
+    // the *included* files only — a folder whose files were all filtered
+    // out shouldn't count), just resolved via the authoritative folder
+    // list instead of guessing from relativePath's shape.
+    const ownerOf = (f: IncludedFile) => findOwningFolder(f.absolutePath, folders!);
+    const distinctOwnerKeys = new Set(included.map((f) => ownerOf(f)?.path ?? f.absolutePath));
+    multiRoot = distinctOwnerKeys.size > 1;
+    displayFiles = multiRoot
+      ? included.map((f) => {
+          const owner = ownerOf(f);
+          return { ...f, relativePath: owner ? `${owner.name}/${f.relativePath}` : f.relativePath };
+        })
+      : included;
+    const firstOwner = included[0] ? ownerOf(included[0]) : undefined;
+    rootLabel = multiRoot ? 'workspace' : firstOwner?.name || 'workspace';
+  } else {
+    // Detect multi-root: infer each file's workspace folder root from its
+    // absolutePath + relativePath, then check whether more than one root is
+    // present among the included files.
+    //
+    // For a file { relativePath: 'src/index.ts', absolutePath: '/root/src/index.ts' }
+    // the folder root is path.resolve('/root/src/index.ts', '../../') = '/root'.
+    const inferFolderRoot = (f: { relativePath: string; absolutePath: string }): string => {
+      const depth = f.relativePath.split('/').length;
+      return path.resolve(f.absolutePath, '../'.repeat(depth));
+    };
+
+    const folderRoots = new Set(included.map(inferFolderRoot));
+    multiRoot = folderRoots.size > 1;
+
+    // When spanning multiple workspace folders, prefix each file's display path
+    // with its folder name so the tree correctly shows e.g.:
+    //   workspace/
+    //   ├── ai-handoff/
+    //   │   └── esbuild.js
+    //   └── buzzer/
+    //       └── project.yml
+    displayFiles = multiRoot
+      ? included.map((f) => ({
+          ...f,
+          relativePath: `${path.basename(inferFolderRoot(f))}/${f.relativePath}`,
+        }))
+      : included;
+
+    rootLabel = multiRoot ? 'workspace' : path.basename(workspaceRoot) || 'workspace';
   }
 
-  const folderRoots = new Set(included.map(inferFolderRoot));
-  const multiRoot = folderRoots.size > 1;
-
-  // When spanning multiple workspace folders, prefix each file's display path
-  // with its folder name so the tree correctly shows e.g.:
-  //   workspace/
-  //   ├── ai-handoff/
-  //   │   └── esbuild.js
-  //   └── buzzer/
-  //       └── project.yml
-  const displayFiles = multiRoot
-    ? included.map((f) => ({
-        ...f,
-        relativePath: `${path.basename(inferFolderRoot(f))}/${f.relativePath}`,
-      }))
-    : included;
-
-  const rootLabel = multiRoot ? 'workspace' : (path.basename(workspaceRoot) || 'workspace');
   const treeSection = buildTreeForFormat(
     displayFiles.map((f) => f.relativePath),
     options.format,

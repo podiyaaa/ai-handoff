@@ -116,6 +116,15 @@ export interface HandoffOptions {
   overriddenPaths?: string[];
   /** When set, appends a git diff section to the handoff, filtered down to the current file selection (empty selection → empty diff). */
   gitDiff?: GitDiffOptions;
+  /**
+   * Feature flag (default off) — resolves each selected file's owning
+   * workspace folder, its own `.gitignore`, and the tree's root label from
+   * the real workspace folder list, instead of always assuming the first
+   * folder. Fixes incorrect labeling/filtering when generating from a
+   * non-primary folder in a multi-root workspace. See
+   * `findOwningFolder()`/`generateHandoff()` in `services/handoff-generator.ts`.
+   */
+  accurateMultiRootPaths?: boolean;
 }
 
 /** The final result of a handoff generation. */
