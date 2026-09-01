@@ -5,6 +5,12 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] — 2026-09-01 (pre-release)
+
+### Changed
+
+- **"Follow imports recursively" is now hidden until "Look for imports" is checked** — matching how "diff scope" is hidden until "Include git diff" is on. It only ever affects the automatic tree-checkbox cascade behavior, so leaving it always visible/independent read as a redundant control.
+
 ## [0.5.3] — 2026-09-01 (pre-release)
 
 ### Fixed
