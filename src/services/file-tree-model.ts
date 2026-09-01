@@ -142,6 +142,16 @@ export class FileTreeModel implements vscode.Disposable {
   private lookForImports = false;
   /** Direct imports only (false) vs. the whole transitive import graph (true, the default). */
   private importsRecursive = true;
+  /**
+   * Provenance for the subset of `selected` that's there *only* because of
+   * the import cascade — never a file the user checked directly. Clicking a
+   * file's checkbox always removes it from this set (a manual click
+   * permanently protects it), so narrowing the cascade settings (or turning
+   * "look for imports" off) can prune what's no longer justified without
+   * ever touching something the user explicitly selected. See
+   * `pruneUnjustifiedCascadeFiles()`.
+   */
+  private readonly cascadeAdded = new Set<string>();
 
   // -- Background search index --------------------------------------------
   private searchIndex: SearchIndexEntry[] | undefined;
@@ -479,14 +489,24 @@ export class FileTreeModel implements vscode.Disposable {
   /**
    * Toggle "look for imports" — whether ticking a JS/TS file's checkbox also
    * selects its imports. Turning it on retroactively cascades imports for
-   * every JS/TS file already selected, so the result doesn't depend on
-   * whether you checked the file or flipped this setting first.
+   * every JS/TS file already selected. Turning it off retroactively removes
+   * every cascade-added file (nothing currently justifies them via cascade
+   * once the feature itself is off) — but never a file you checked directly.
    */
   async setLookForImports(value: boolean): Promise<void> {
     const turningOn = value && !this.lookForImports;
+    const turningOff = !value && this.lookForImports;
     this.lookForImports = value;
+    let changed = false;
     if (turningOn) {
-      await this.applyImportCascadeToSelection();
+      changed = await this.applyImportCascadeToSelection();
+    } else if (turningOff) {
+      changed = await this.pruneUnjustifiedCascadeFiles();
+    }
+    if (changed) {
+      this.recomputeSelectedAncestors();
+      this._onDidChangeTree.fire();
+      this._onDidChangeSelection.fire(this.getSelection());
     }
   }
 
@@ -497,15 +517,24 @@ export class FileTreeModel implements vscode.Disposable {
   /**
    * Toggle whether the import cascade follows the whole transitive graph
    * (true) or just direct imports (false). While "look for imports" is on,
-   * changing this retroactively re-applies the cascade at the new depth to
-   * every JS/TS file already selected (only additive — switching back to
-   * direct-only never un-selects files a wider pass already pulled in).
+   * changing this retroactively re-applies the cascade at the new depth:
+   * turning it on adds whatever the wider pass newly reaches; turning it off
+   * removes whatever cascade-added files are no longer reachable at the
+   * narrower depth — but, same guarantee as `setLookForImports`, never a
+   * file you checked directly, even if it happens to also be reachable via
+   * cascade from something else.
    */
   async setImportsRecursive(value: boolean): Promise<void> {
-    const changed = value !== this.importsRecursive;
+    const changedValue = value !== this.importsRecursive;
     this.importsRecursive = value;
-    if (changed && this.lookForImports) {
-      await this.applyImportCascadeToSelection();
+    let changed = false;
+    if (changedValue && this.lookForImports) {
+      changed = value ? await this.applyImportCascadeToSelection() : await this.pruneUnjustifiedCascadeFiles();
+    }
+    if (changed) {
+      this.recomputeSelectedAncestors();
+      this._onDidChangeTree.fire();
+      this._onDidChangeSelection.fire(this.getSelection());
     }
   }
 
@@ -514,12 +543,14 @@ export class FileTreeModel implements vscode.Disposable {
   }
 
   /**
-   * Cascade imports (per the current lookForImports/importsRecursive
-   * settings) for every JS/TS file already in `selected`. Shared by
-   * `setLookForImports`/`setImportsRecursive` so toggling either one applies
-   * retroactively instead of only affecting future `toggleFile` calls.
+   * Widen: cascade imports (per the current lookForImports/importsRecursive
+   * settings) for every JS/TS file already in `selected`, tracking each
+   * newly-added file in `cascadeAdded`. Shared by `setLookForImports`/
+   * `setImportsRecursive` so toggling either one applies retroactively
+   * instead of only affecting future `toggleFile` calls. Returns whether
+   * anything was actually added.
    */
-  private async applyImportCascadeToSelection(): Promise<void> {
+  private async applyImportCascadeToSelection(): Promise<boolean> {
     const jsTsSelected = Array.from(this.selected).filter((p) => isJsOrTsFile(p));
     let added = false;
     for (const relativePath of jsTsSelected) {
@@ -527,15 +558,48 @@ export class FileTreeModel implements vscode.Disposable {
       for (const resolved of closure) {
         if (!this.selected.has(resolved)) {
           this.selected.add(resolved);
+          this.cascadeAdded.add(resolved);
           added = true;
         }
       }
     }
-    if (added) {
-      this.recomputeSelectedAncestors();
-      this._onDidChangeTree.fire();
-      this._onDidChangeSelection.fire(this.getSelection());
+    return added;
+  }
+
+  /**
+   * Narrow: recompute what the cascade currently justifies from scratch —
+   * the union of `resolveImportClosure` over every *manually*-selected JS/TS
+   * file (a cascade-added file's own presence is never itself treated as
+   * justification for others, since it's in question too) at the current
+   * `importsRecursive` depth, or an empty set entirely if `lookForImports`
+   * is off. Any `cascadeAdded` file not in that fresh set gets removed.
+   * Because this is recomputed from every remaining manual anchor each time
+   * (not just the one that changed), a file still reachable through some
+   * *other* selected file is never dropped — see the class doc's "Q2"
+   * reasoning. Returns whether anything was actually removed.
+   */
+  private async pruneUnjustifiedCascadeFiles(): Promise<boolean> {
+    const reachable = new Set<string>();
+    if (this.lookForImports) {
+      const manualAnchors = Array.from(this.selected).filter(
+        (p) => isJsOrTsFile(p) && !this.cascadeAdded.has(p),
+      );
+      for (const anchor of manualAnchors) {
+        const closure = await this.resolveImportClosure(anchor, this.importsRecursive);
+        for (const r of closure) {
+          reachable.add(r);
+        }
+      }
     }
+    let removed = false;
+    for (const p of Array.from(this.cascadeAdded)) {
+      if (!reachable.has(p)) {
+        this.selected.delete(p);
+        this.cascadeAdded.delete(p);
+        removed = true;
+      }
+    }
+    return removed;
   }
 
   /**
@@ -593,6 +657,10 @@ export class FileTreeModel implements vscode.Disposable {
   async setSelection(paths: string[]): Promise<void> {
     this.selected = new Set(paths);
     this.checkedDirs = new Set();
+    // A bulk restore (e.g. loading a bookmark) is an explicit, curated set —
+    // treat every path as manual/permanent, never something a later cascade
+    // setting change could prune.
+    this.cascadeAdded.clear();
     this.recomputeSelectedAncestors();
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire(this.getSelection());
@@ -604,6 +672,7 @@ export class FileTreeModel implements vscode.Disposable {
     }
     this.selected.clear();
     this.checkedDirs.clear();
+    this.cascadeAdded.clear();
     this.recomputeSelectedAncestors();
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire([]);
@@ -618,20 +687,36 @@ export class FileTreeModel implements vscode.Disposable {
    * its import closure (direct-only or the whole transitive graph,
    * depending on `importsRecursive`) and adds every resolved file into the
    * selection — but only fires the tree/selection-changed events once at
-   * the end, not once per resolved file.
+   * the end, not once per resolved file. A manual check always removes the
+   * file from `cascadeAdded` if present — clicking it directly permanently
+   * protects it from later pruning, even if a cascade had already added it.
+   *
+   * When unchecking, re-runs `pruneUnjustifiedCascadeFiles()` (while "look
+   * for imports" is on): if the file just unchecked was itself a manually-
+   * selected anchor, this drops any cascade-added file no longer reachable
+   * from any *remaining* manual anchor — but only ever cascade-added files,
+   * never something else you checked directly.
    */
   async toggleFile(relativePath: string, checked: boolean): Promise<void> {
     if (checked) {
       this.selected.add(relativePath);
+      this.cascadeAdded.delete(relativePath);
       if (this.lookForImports && isJsOrTsFile(relativePath)) {
         const closure = await this.resolveImportClosure(relativePath, this.importsRecursive);
         for (const resolved of closure) {
-          this.selected.add(resolved);
+          if (!this.selected.has(resolved)) {
+            this.selected.add(resolved);
+            this.cascadeAdded.add(resolved);
+          }
         }
       }
     } else {
       this.selected.delete(relativePath);
+      this.cascadeAdded.delete(relativePath);
       this.removeAncestorDirs(relativePath);
+      if (this.lookForImports) {
+        await this.pruneUnjustifiedCascadeFiles();
+      }
     }
     this.recomputeSelectedAncestors();
     this._onDidToggleIndividualFile.fire({ relativePath, checked });
@@ -793,13 +878,22 @@ export class FileTreeModel implements vscode.Disposable {
     if (checked) {
       this.checkedDirs.add(relativePath);
       for (const f of files) {
-        this.selected.add(this.toRelative(f, ctx.folderRoot, ctx.folderName));
+        const rel = this.toRelative(f, ctx.folderRoot, ctx.folderName);
+        this.selected.add(rel);
+        // Bulk directory selection never triggers the import cascade (see
+        // the class doc), and always counts as manual/permanent.
+        this.cascadeAdded.delete(rel);
       }
     } else {
       this.checkedDirs.delete(relativePath);
       this.removeAncestorDirs(relativePath);
       for (const f of files) {
-        this.selected.delete(this.toRelative(f, ctx.folderRoot, ctx.folderName));
+        const rel = this.toRelative(f, ctx.folderRoot, ctx.folderName);
+        this.selected.delete(rel);
+        this.cascadeAdded.delete(rel);
+      }
+      if (this.lookForImports) {
+        await this.pruneUnjustifiedCascadeFiles();
       }
     }
     this.recomputeSelectedAncestors();

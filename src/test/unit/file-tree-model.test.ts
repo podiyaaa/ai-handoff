@@ -783,4 +783,71 @@ describe('FileTreeModel — toggleFile import cascade', () => {
     expect(treeFires).to.equal(0);
     expect(selectionFires).to.equal(0);
   });
+
+  it('narrowing "Follow imports recursively" off prunes cascade-added files no longer reachable, but keeps direct imports', async () => {
+    await model.setLookForImports(true); // recursive is the default (true)
+    await model.toggleFile('src/entry.ts', true);
+    expect(model.getSelection().sort()).to.deep.equal(
+      ['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts', 'src/deep.ts'].sort(),
+    );
+
+    await model.setImportsRecursive(false);
+    // src/deep.ts was only reachable transitively (entry -> helper -> deep);
+    // src/helper.ts and src/app/widget.ts are still direct imports of entry.
+    expect(model.getSelection().sort()).to.deep.equal(['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts'].sort());
+  });
+
+  it('turning "look for imports" off entirely prunes every cascade-added file, keeping only the manual anchor', async () => {
+    await model.setLookForImports(true);
+    await model.toggleFile('src/entry.ts', true);
+    expect(model.getSelection().sort()).to.deep.equal(
+      ['src/entry.ts', 'src/helper.ts', 'src/app/widget.ts', 'src/deep.ts'].sort(),
+    );
+
+    await model.setLookForImports(false);
+    expect(model.getSelection()).to.deep.equal(['src/entry.ts']);
+  });
+
+  it('manually checking a cascade-added file protects it from later pruning', async () => {
+    await model.setLookForImports(true);
+    await model.toggleFile('src/entry.ts', true);
+    // src/deep.ts arrived only via the cascade — now click it directly too.
+    await model.toggleFile('src/deep.ts', true);
+
+    await model.setLookForImports(false);
+    // Everything else the cascade added is gone; deep.ts survives because it
+    // was manually clicked, even though it originally came from the cascade.
+    expect(model.getSelection().sort()).to.deep.equal(['src/deep.ts', 'src/entry.ts'].sort());
+  });
+
+  it('unchecking a manual anchor only prunes cascade-added files no longer reachable from any remaining anchor', async () => {
+    // A second manually-selected file that independently imports helper.ts,
+    // so helper.ts stays justified even after entry.ts is unchecked.
+    await fs.writeFile(path.join(root, 'src', 'other.ts'), `import Helper from './helper';\n`);
+
+    await model.setLookForImports(true);
+    await model.setImportsRecursive(false); // keep this scenario to direct imports only
+    await model.toggleFile('src/entry.ts', true); // -> entry (manual), helper + widget (cascade)
+    await model.toggleFile('src/other.ts', true); // -> other (manual); also imports helper, already selected
+    expect(model.getSelection().sort()).to.deep.equal(
+      ['src/entry.ts', 'src/other.ts', 'src/helper.ts', 'src/app/widget.ts'].sort(),
+    );
+
+    await model.toggleFile('src/entry.ts', false);
+    // widget.ts was only reachable via entry.ts, now gone. helper.ts is still
+    // reachable via other.ts, so it survives despite never being clicked directly.
+    expect(model.getSelection().sort()).to.deep.equal(['src/other.ts', 'src/helper.ts'].sort());
+  });
+
+  it('bulk directory selection is always manual — pruning never touches files added via toggleDirectory', async () => {
+    await model.setLookForImports(true);
+    await model.toggleDirectory('src', true);
+    const fullSelection = model.getSelection().sort();
+    expect(fullSelection).to.include.members(['src/entry.ts', 'src/helper.ts', 'src/deep.ts', 'src/app/widget.ts']);
+
+    await model.setLookForImports(false);
+    // Nothing was cascade-added (directory selection never triggers the
+    // cascade), so nothing gets pruned.
+    expect(model.getSelection().sort()).to.deep.equal(fullSelection);
+  });
 });
