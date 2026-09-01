@@ -323,6 +323,30 @@ describe('generateHandoff — pipeline', () => {
   });
 });
 
+// ---- Base64 output ---------------------------------------------------------
+
+describe('generateHandoff — base64Encode', () => {
+  let root: string;
+  before(async () => { root = await makeWorkspace(); });
+  after(async () => { await fs.rm(root, { recursive: true, force: true }); });
+
+  it('base64-encodes result.text while stats reflect the real, non-encoded content', async () => {
+    const plain = await generateHandoff(
+      [sel(root, 'src/index.ts'), sel(root, 'README.md')],
+      baseOpts,
+      root,
+    );
+    const encoded = await generateHandoff(
+      [sel(root, 'src/index.ts'), sel(root, 'README.md')],
+      { ...baseOpts, base64Encode: true },
+      root,
+    );
+
+    expect(Buffer.from(encoded.text, 'base64').toString('utf-8')).to.equal(plain.text);
+    expect(encoded.stats).to.deep.equal(plain.stats);
+  });
+});
+
 // ---- Git diff integration ------------------------------------------------
 
 function git(cwd: string, args: string[]): void {

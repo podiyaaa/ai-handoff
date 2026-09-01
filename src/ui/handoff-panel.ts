@@ -62,6 +62,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   private lastSkipped: Array<{ relativePath: string; reason: string; detail?: string }> = [];
   private gitDiffEnabled: boolean;
   private diffScope: DiffScope;
+  private base64Encode = false;
   private readonly repoRootCache = new RepoRootCache();
   // computeState() does real fs I/O, so pushState() calls triggered in quick
   // succession (e.g. two toggleFile calls, or a toggle followed by a
@@ -193,6 +194,18 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         void this.pushState();
       }
     });
+    bridge.handle('actions/setBase64Encode', ({ enabled }) => {
+      this.base64Encode = enabled;
+      void this.pushState();
+    });
+    bridge.handle('actions/setLookForImports', async ({ enabled }) => {
+      await this.model.setLookForImports(enabled);
+      void this.pushState();
+    });
+    bridge.handle('actions/setImportsRecursive', async ({ enabled }) => {
+      await this.model.setImportsRecursive(enabled);
+      void this.pushState();
+    });
     bridge.handle('actions/overrideFile', async ({ path: relativePath }) => {
       this.overriddenPaths.add(relativePath);
       // Add the overridden path to the selection too, so it actually gets
@@ -238,6 +251,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       overriddenPaths: Array.from(this.overriddenPaths),
       gitDiff: { enabled: this.gitDiffEnabled, scope: this.diffScope },
       accurateMultiRootPaths: this.getConfig('accurateMultiRootPaths', false),
+      base64Encode: this.base64Encode,
     };
   }
 
@@ -270,6 +284,9 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         skipped: [],
         gitDiffEnabled: this.gitDiffEnabled,
         diffScope: this.diffScope,
+        base64Encode: this.base64Encode,
+        lookForImports: this.model.getLookForImports(),
+        importsRecursive: this.model.getImportsRecursive(),
         hasWorkspace: false,
       };
     }
@@ -296,6 +313,9 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       skipped: this.lastSkipped,
       gitDiffEnabled: this.gitDiffEnabled,
       diffScope: this.diffScope,
+      base64Encode: this.base64Encode,
+      lookForImports: this.model.getLookForImports(),
+      importsRecursive: this.model.getImportsRecursive(),
       hasWorkspace: true,
     };
   }
@@ -827,6 +847,11 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       </select>
 
       <div class="checkbox-row">
+        <input type="checkbox" id="base64-encode" />
+        <label for="base64-encode">Base64 encode output</label>
+      </div>
+
+      <div class="checkbox-row">
         <input type="checkbox" id="diff-enabled" />
         <label for="diff-enabled">Include git diff</label>
       </div>
@@ -835,6 +860,15 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         <option value="staged">Staged only</option>
         <option value="both">Both</option>
       </select>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="look-for-imports" />
+        <label for="look-for-imports">Look for imports (JS/TS)</label>
+      </div>
+      <div class="checkbox-row hidden" id="imports-recursive-row">
+        <input type="checkbox" id="imports-recursive" checked />
+        <label for="imports-recursive">Follow imports recursively</label>
+      </div>
 
       <button class="primary" id="generate">Generate Handoff</button>
       <div id="actions-error" class="error hidden"></div>

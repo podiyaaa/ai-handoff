@@ -335,6 +335,56 @@ describe('HandoffPanelProvider', () => {
     expect(response.result.state.diffScope).to.equal('staged');
   });
 
+  it('actions/setBase64Encode updates state and is reflected in the next actions/ready call', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/setBase64Encode', params: { enabled: true } });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+
+    trigger({ kind: 'request', id: '2', method: 'actions/ready', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '2')));
+    const response = findResponse(posted, '2') as { result: { state: { base64Encode: boolean } } };
+    expect(response.result.state.base64Encode).to.be.true;
+  });
+
+  it('actions/setLookForImports and actions/setImportsRecursive update the model and are reflected in actions/ready', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/setLookForImports', params: { enabled: true } });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+    trigger({ kind: 'request', id: '2', method: 'actions/setImportsRecursive', params: { enabled: false } });
+    await waitUntil(() => Boolean(findResponse(posted, '2')));
+
+    expect(model.getLookForImports()).to.be.true;
+    expect(model.getImportsRecursive()).to.be.false;
+
+    trigger({ kind: 'request', id: '3', method: 'actions/ready', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '3')));
+    const response = findResponse(posted, '3') as {
+      result: { state: { lookForImports: boolean; importsRecursive: boolean } };
+    };
+    expect(response.result.state.lookForImports).to.be.true;
+    expect(response.result.state.importsRecursive).to.be.false;
+  });
+
+  it('actions/ready reports the default lookForImports/importsRecursive state before any toggle', async () => {
+    const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
+    const { view, posted, trigger } = fakeView();
+    provider.resolveWebviewView(view);
+
+    trigger({ kind: 'request', id: '1', method: 'actions/ready', params: undefined });
+    await waitUntil(() => Boolean(findResponse(posted, '1')));
+    const response = findResponse(posted, '1') as {
+      result: { state: { lookForImports: boolean; importsRecursive: boolean } };
+    };
+    expect(response.result.state.lookForImports).to.be.false;
+    expect(response.result.state.importsRecursive).to.be.true;
+  });
+
   it('actions/overrideFile adds the path to both overriddenPaths and the current selection', async () => {
     const provider = new HandoffPanelProvider({ fsPath: '/fake/ext' } as never, model, store, root);
     const { view, posted, trigger } = fakeView();

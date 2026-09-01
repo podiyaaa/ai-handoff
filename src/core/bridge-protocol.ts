@@ -61,6 +61,12 @@ export interface PanelState {
   skipped: PanelSkippedFile[];
   gitDiffEnabled: boolean;
   diffScope: DiffScope;
+  /** Base64-encodes the final formatted output text — a post-processing step on top of `format`, not a new format of its own. */
+  base64Encode: boolean;
+  /** "Look for imports" — whether checking a JS/TS file's checkbox also auto-selects its imports. */
+  lookForImports: boolean;
+  /** Direct imports only (false) vs. the whole transitive import graph (true, the default). Governs only the automatic tree-checkbox cascade — the standalone "Generate handoff with imports" right-click command always uses direct imports only, regardless of this setting. */
+  importsRecursive: boolean;
   /** False when no workspace folder is open — the tree shows an explanatory empty state instead of a silently blank list. */
   hasWorkspace: boolean;
 }
@@ -98,6 +104,9 @@ export interface BridgeMethods {
   'actions/setInstructions': { params: { text: string }; result: void };
   'actions/setDiffEnabled': { params: { enabled: boolean }; result: void };
   'actions/setDiffScope': { params: { scope: DiffScope }; result: void };
+  'actions/setBase64Encode': { params: { enabled: boolean }; result: void };
+  'actions/setLookForImports': { params: { enabled: boolean }; result: void };
+  'actions/setImportsRecursive': { params: { enabled: boolean }; result: void };
   'actions/generate': { params: void; result: void };
   'actions/overrideFile': { params: { path: string }; result: void };
   'bookmarks/save': { params: void; result: void };

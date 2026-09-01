@@ -125,6 +125,13 @@ export interface HandoffOptions {
    * `findOwningFolder()`/`generateHandoff()` in `services/handoff-generator.ts`.
    */
   accurateMultiRootPaths?: boolean;
+  /**
+   * When true, base64-encodes the final formatted output text — a
+   * post-processing step applied after `formatHandoff()`, not a new
+   * `OutputFormat`. `HandoffStats` (including `estimatedTokens`) still
+   * reflect the real, non-encoded content.
+   */
+  base64Encode?: boolean;
 }
 
 /** The final result of a handoff generation. */

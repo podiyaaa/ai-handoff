@@ -34,8 +34,11 @@ import ignore, { Ignore } from 'ignore';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { DEFAULT_SMART_FILTER_PATTERNS, parseSearchExcludeDirs } from '../core/filter';
+import { extractImportSpecifiers, isJsOrTsFile, isRelativeSpecifier, JS_TS_EXTENSIONS } from '../core/import-parser';
 import { matchesSearchQuery, ParsedSearchQuery } from '../core/search-filter';
+import { matchPathAlias } from '../core/tsconfig-paths';
 import type { TreeNodeInfo } from '../core/types';
+import { TsconfigResolver } from './tsconfig-resolver';
 
 /** A single file entry in the background search index. */
 interface SearchIndexEntry {
@@ -132,6 +135,23 @@ export class FileTreeModel implements vscode.Disposable {
    */
   private showSelectedOnly = false;
   private selectedAncestorDirs: Set<string> | undefined;
+
+  // -- JS/TS import-following selection -----------------------------------
+  private readonly tsconfigResolver = new TsconfigResolver();
+  /** "Look for imports" — whether checking a JS/TS file's checkbox also auto-selects its imports. Off by default. */
+  private lookForImports = false;
+  /** Direct imports only (false) vs. the whole transitive import graph (true, the default). */
+  private importsRecursive = true;
+  /**
+   * Provenance for the subset of `selected` that's there *only* because of
+   * the import cascade — never a file the user checked directly. Clicking a
+   * file's checkbox always removes it from this set (a manual click
+   * permanently protects it), so narrowing the cascade settings (or turning
+   * "look for imports" off) can prune what's no longer justified without
+   * ever touching something the user explicitly selected. See
+   * `pruneUnjustifiedCascadeFiles()`.
+   */
+  private readonly cascadeAdded = new Set<string>();
 
   // -- Background search index --------------------------------------------
   private searchIndex: SearchIndexEntry[] | undefined;
@@ -464,6 +484,124 @@ export class FileTreeModel implements vscode.Disposable {
     return this.showSelectedOnly;
   }
 
+  // -- JS/TS import-following selection -------------------------------------
+
+  /**
+   * Toggle "look for imports" — whether ticking a JS/TS file's checkbox also
+   * selects its imports. Turning it on retroactively cascades imports for
+   * every JS/TS file already selected. Turning it off retroactively removes
+   * every cascade-added file (nothing currently justifies them via cascade
+   * once the feature itself is off) — but never a file you checked directly.
+   */
+  async setLookForImports(value: boolean): Promise<void> {
+    const turningOn = value && !this.lookForImports;
+    const turningOff = !value && this.lookForImports;
+    this.lookForImports = value;
+    let changed = false;
+    if (turningOn) {
+      changed = await this.applyImportCascadeToSelection();
+    } else if (turningOff) {
+      changed = await this.pruneUnjustifiedCascadeFiles();
+    }
+    if (changed) {
+      this.recomputeSelectedAncestors();
+      this._onDidChangeTree.fire();
+      this._onDidChangeSelection.fire(this.getSelection());
+    }
+  }
+
+  getLookForImports(): boolean {
+    return this.lookForImports;
+  }
+
+  /**
+   * Toggle whether the import cascade follows the whole transitive graph
+   * (true) or just direct imports (false). While "look for imports" is on,
+   * changing this retroactively re-applies the cascade at the new depth:
+   * turning it on adds whatever the wider pass newly reaches; turning it off
+   * removes whatever cascade-added files are no longer reachable at the
+   * narrower depth — but, same guarantee as `setLookForImports`, never a
+   * file you checked directly, even if it happens to also be reachable via
+   * cascade from something else.
+   */
+  async setImportsRecursive(value: boolean): Promise<void> {
+    const changedValue = value !== this.importsRecursive;
+    this.importsRecursive = value;
+    let changed = false;
+    if (changedValue && this.lookForImports) {
+      changed = value ? await this.applyImportCascadeToSelection() : await this.pruneUnjustifiedCascadeFiles();
+    }
+    if (changed) {
+      this.recomputeSelectedAncestors();
+      this._onDidChangeTree.fire();
+      this._onDidChangeSelection.fire(this.getSelection());
+    }
+  }
+
+  getImportsRecursive(): boolean {
+    return this.importsRecursive;
+  }
+
+  /**
+   * Widen: cascade imports (per the current lookForImports/importsRecursive
+   * settings) for every JS/TS file already in `selected`, tracking each
+   * newly-added file in `cascadeAdded`. Shared by `setLookForImports`/
+   * `setImportsRecursive` so toggling either one applies retroactively
+   * instead of only affecting future `toggleFile` calls. Returns whether
+   * anything was actually added.
+   */
+  private async applyImportCascadeToSelection(): Promise<boolean> {
+    const jsTsSelected = Array.from(this.selected).filter((p) => isJsOrTsFile(p));
+    let added = false;
+    for (const relativePath of jsTsSelected) {
+      const closure = await this.resolveImportClosure(relativePath, this.importsRecursive);
+      for (const resolved of closure) {
+        if (!this.selected.has(resolved)) {
+          this.selected.add(resolved);
+          this.cascadeAdded.add(resolved);
+          added = true;
+        }
+      }
+    }
+    return added;
+  }
+
+  /**
+   * Narrow: recompute what the cascade currently justifies from scratch —
+   * the union of `resolveImportClosure` over every *manually*-selected JS/TS
+   * file (a cascade-added file's own presence is never itself treated as
+   * justification for others, since it's in question too) at the current
+   * `importsRecursive` depth, or an empty set entirely if `lookForImports`
+   * is off. Any `cascadeAdded` file not in that fresh set gets removed.
+   * Because this is recomputed from every remaining manual anchor each time
+   * (not just the one that changed), a file still reachable through some
+   * *other* selected file is never dropped — see the class doc's "Q2"
+   * reasoning. Returns whether anything was actually removed.
+   */
+  private async pruneUnjustifiedCascadeFiles(): Promise<boolean> {
+    const reachable = new Set<string>();
+    if (this.lookForImports) {
+      const manualAnchors = Array.from(this.selected).filter(
+        (p) => isJsOrTsFile(p) && !this.cascadeAdded.has(p),
+      );
+      for (const anchor of manualAnchors) {
+        const closure = await this.resolveImportClosure(anchor, this.importsRecursive);
+        for (const r of closure) {
+          reachable.add(r);
+        }
+      }
+    }
+    let removed = false;
+    for (const p of Array.from(this.cascadeAdded)) {
+      if (!reachable.has(p)) {
+        this.selected.delete(p);
+        this.cascadeAdded.delete(p);
+        removed = true;
+      }
+    }
+    return removed;
+  }
+
   /**
    * Derive every ancestor directory of every selected path, straight from
    * `selected` — no disk walk needed (unlike the search index's
@@ -519,6 +657,10 @@ export class FileTreeModel implements vscode.Disposable {
   async setSelection(paths: string[]): Promise<void> {
     this.selected = new Set(paths);
     this.checkedDirs = new Set();
+    // A bulk restore (e.g. loading a bookmark) is an explicit, curated set —
+    // treat every path as manual/permanent, never something a later cascade
+    // setting change could prune.
+    this.cascadeAdded.clear();
     this.recomputeSelectedAncestors();
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire(this.getSelection());
@@ -530,6 +672,7 @@ export class FileTreeModel implements vscode.Disposable {
     }
     this.selected.clear();
     this.checkedDirs.clear();
+    this.cascadeAdded.clear();
     this.recomputeSelectedAncestors();
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire([]);
@@ -539,18 +682,186 @@ export class FileTreeModel implements vscode.Disposable {
    * Toggle a single file's checkbox. When unchecking, also clears any
    * ancestor directories from `checkedDirs` — a parent can no longer be
    * considered "fully selected" after one of its descendants is removed.
+   *
+   * When checking a JS/TS file with "look for imports" on, also resolves
+   * its import closure (direct-only or the whole transitive graph,
+   * depending on `importsRecursive`) and adds every resolved file into the
+   * selection — but only fires the tree/selection-changed events once at
+   * the end, not once per resolved file. A manual check always removes the
+   * file from `cascadeAdded` if present — clicking it directly permanently
+   * protects it from later pruning, even if a cascade had already added it.
+   *
+   * When unchecking, re-runs `pruneUnjustifiedCascadeFiles()` (while "look
+   * for imports" is on): if the file just unchecked was itself a manually-
+   * selected anchor, this drops any cascade-added file no longer reachable
+   * from any *remaining* manual anchor — but only ever cascade-added files,
+   * never something else you checked directly.
    */
   async toggleFile(relativePath: string, checked: boolean): Promise<void> {
     if (checked) {
       this.selected.add(relativePath);
+      this.cascadeAdded.delete(relativePath);
+      if (this.lookForImports && isJsOrTsFile(relativePath)) {
+        const closure = await this.resolveImportClosure(relativePath, this.importsRecursive);
+        for (const resolved of closure) {
+          if (!this.selected.has(resolved)) {
+            this.selected.add(resolved);
+            this.cascadeAdded.add(resolved);
+          }
+        }
+      }
     } else {
       this.selected.delete(relativePath);
+      this.cascadeAdded.delete(relativePath);
       this.removeAncestorDirs(relativePath);
+      if (this.lookForImports) {
+        await this.pruneUnjustifiedCascadeFiles();
+      }
     }
     this.recomputeSelectedAncestors();
     this._onDidToggleIndividualFile.fire({ relativePath, checked });
     this._onDidChangeTree.fire();
     this._onDidChangeSelection.fire(this.getSelection());
+  }
+
+  /**
+   * BFS the JS/TS import graph starting at `relativePath`, resolving each
+   * specifier (relative imports directly, bare specifiers via a tsconfig/
+   * jsconfig path alias) to a real workspace-relative file. Never resolves
+   * into node_modules: a bare specifier with no matching alias is a genuine
+   * package import and is dropped. `recursive: false` returns only the
+   * starting file's own direct imports; `true` continues until no new files
+   * are found. A `visited` set prevents cycles/dupes (the starting file
+   * itself is pre-seeded so it's never re-added to the result).
+   */
+  async resolveImportClosure(relativePath: string, recursive: boolean): Promise<string[]> {
+    const visited = new Set<string>([relativePath]);
+    const result: string[] = [];
+    let frontier: string[] = [relativePath];
+
+    while (frontier.length > 0) {
+      const nextFrontier: string[] = [];
+      for (const current of frontier) {
+        const resolved = await this.resolveDirectImports(current);
+        for (const rel of resolved) {
+          if (visited.has(rel)) {
+            continue;
+          }
+          visited.add(rel);
+          result.push(rel);
+          nextFrontier.push(rel);
+        }
+      }
+      if (!recursive) {
+        break;
+      }
+      frontier = nextFrontier;
+    }
+
+    return result;
+  }
+
+  /** Resolve just the direct imports of one file to workspace-relative paths that exist on disk. */
+  private async resolveDirectImports(relativePath: string): Promise<string[]> {
+    const ctx = this.resolveContext(relativePath);
+    if (!ctx) {
+      return [];
+    }
+    const source = await this.readFileTextSafe(ctx.absolutePath);
+    if (source === undefined) {
+      return [];
+    }
+
+    const resolved: string[] = [];
+    for (const specifier of extractImportSpecifiers(source)) {
+      const bases = await this.candidateBasePaths(specifier, ctx);
+      if (bases.length === 0) {
+        // Either a relative import (always has exactly one base) or a bare
+        // specifier with no tsconfig/jsconfig alias match — the latter is a
+        // genuine package import, never resolved into node_modules.
+        continue;
+      }
+      const hit = await this.probeCandidates(bases);
+      if (!hit) {
+        continue;
+      }
+      const rel = this.absoluteToOwningRelative(hit);
+      if (rel) {
+        resolved.push(rel);
+      }
+    }
+    return resolved;
+  }
+
+  /**
+   * Candidate base paths (before extension/index probing) for one import
+   * specifier. A relative specifier resolves directly against the importing
+   * file's own directory. A bare specifier is only a candidate if the
+   * importing file's tsconfig/jsconfig alias config matches it — otherwise
+   * it's skipped entirely (never guessed at, never resolved into node_modules).
+   */
+  private async candidateBasePaths(specifier: string, ctx: PathContext): Promise<string[]> {
+    if (isRelativeSpecifier(specifier)) {
+      return [path.resolve(path.dirname(ctx.absolutePath), specifier)];
+    }
+    const aliasConfig = await this.tsconfigResolver.resolveForFile(ctx.absolutePath, ctx.folderRoot);
+    if (!aliasConfig) {
+      return [];
+    }
+    const matches = matchPathAlias(specifier, aliasConfig.paths);
+    return matches.map((m) => path.resolve(aliasConfig.baseUrlAbs, m));
+  }
+
+  /**
+   * Probe each base path on disk, in order: the exact path, the path plus
+   * each JS/TS extension, then `path/index` plus each extension. Returns the
+   * first absolute path that exists as a file, or `undefined` if none of the
+   * bases resolve to anything.
+   */
+  private async probeCandidates(bases: string[]): Promise<string | undefined> {
+    for (const base of bases) {
+      const probes = [
+        base,
+        ...JS_TS_EXTENSIONS.map((ext) => base + ext),
+        ...JS_TS_EXTENSIONS.map((ext) => path.join(base, `index${ext}`)),
+      ];
+      for (const probe of probes) {
+        if (await this.pathExistsAsFile(probe)) {
+          return probe;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private async pathExistsAsFile(absolutePath: string): Promise<boolean> {
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath));
+      return (stat.type & vscode.FileType.File) !== 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async readFileTextSafe(absolutePath: string): Promise<string | undefined> {
+    try {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(absolutePath));
+      return Buffer.from(bytes).toString('utf-8');
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Convert a resolved absolute path back to a workspace-relative path, or `undefined` if it's outside every workspace folder. */
+  private absoluteToOwningRelative(absolutePath: string): string | undefined {
+    const owner = this.workspaceFolders.find((f) => {
+      const rel = path.relative(f.uri.fsPath, absolutePath);
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    });
+    if (!owner) {
+      return undefined;
+    }
+    return this.toRelative(absolutePath, owner.uri.fsPath, this.workspaceFolders.length > 1 ? owner.name : undefined);
   }
 
   /**
@@ -567,13 +878,22 @@ export class FileTreeModel implements vscode.Disposable {
     if (checked) {
       this.checkedDirs.add(relativePath);
       for (const f of files) {
-        this.selected.add(this.toRelative(f, ctx.folderRoot, ctx.folderName));
+        const rel = this.toRelative(f, ctx.folderRoot, ctx.folderName);
+        this.selected.add(rel);
+        // Bulk directory selection never triggers the import cascade (see
+        // the class doc), and always counts as manual/permanent.
+        this.cascadeAdded.delete(rel);
       }
     } else {
       this.checkedDirs.delete(relativePath);
       this.removeAncestorDirs(relativePath);
       for (const f of files) {
-        this.selected.delete(this.toRelative(f, ctx.folderRoot, ctx.folderName));
+        const rel = this.toRelative(f, ctx.folderRoot, ctx.folderName);
+        this.selected.delete(rel);
+        this.cascadeAdded.delete(rel);
+      }
+      if (this.lookForImports) {
+        await this.pruneUnjustifiedCascadeFiles();
       }
     }
     this.recomputeSelectedAncestors();

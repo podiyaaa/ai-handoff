@@ -5,6 +5,53 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-09-02 (pre-release, combined test build)
+
+Combines the multi-root path/gitignore fix (PR #7) with the base64 +
+JS/TS import-following work below (0.5.0–0.5.5) into one build for
+testing on another machine. Not yet merged to `main`.
+
+### Fixed
+
+- **Wrong root label / `.gitignore` in multi-root workspaces** — generating a handoff for files in a non-first sibling workspace folder used to label the tree root with the *first* folder's name and filter against its `.gitignore` instead of the actual folder's own. Fixed behind a new setting, `aiHandoff.accurateMultiRootPaths` (default off while validated) — enable it in settings to get the corrected behavior.
+
+## [0.5.5] — 2026-09-02 (pre-release)
+
+### Changed
+
+- **Narrowing the import-cascade settings now prunes the selection, not just widens it.** Turning "Follow imports recursively" back off, or turning "Look for imports" off entirely, now removes files the cascade added that are no longer justified at the new settings — but never a file you checked directly yourself, and never a file still legitimately reachable through some *other* selected file's imports. (Previously, narrowing never removed anything — once a file was cascaded in, it stayed no matter what.)
+
+## [0.5.4] — 2026-09-01 (pre-release)
+
+### Changed
+
+- **"Follow imports recursively" is now hidden until "Look for imports" is checked** — matching how "diff scope" is hidden until "Include git diff" is on. It only ever affects the automatic tree-checkbox cascade behavior, so leaving it always visible/independent read as a redundant control.
+
+## [0.5.3] — 2026-09-01 (pre-release)
+
+### Fixed
+
+- **"Look for imports" and "Follow imports recursively" now apply retroactively.** Previously, selecting a file first and then turning "Look for imports" on did nothing to it — the setting only affected files checked *after* it was enabled. Turning either toggle on (or widening "Follow imports recursively" from off to on) now immediately cascades imports for whatever JS/TS files are already selected, so the result no longer depends on which order you did things in.
+
+## [0.5.2] — 2026-08-31 (pre-release)
+
+### Added
+
+- **"Generate handoff with imports (Base64)"** — right-click command alongside "Generate handoff with imports" that does the same (a JS/TS file plus its direct first-level imports) but base64-encodes the output, for parity with the existing "Generate from selection (Base64)" / "Generate handoff from this file (Base64)" commands.
+
+## [0.5.1] — 2026-08-31 (pre-release)
+
+### Fixed
+
+- **"Generate handoff with imports"** (renamed from "Select with Imports") is now a standalone action, like "Generate handoff from this file" — it generates immediately from a JS/TS file plus its direct (first-level) imports, rather than checking boxes in the sidebar tree. Previously it silently reported "added 0 file(s)" whenever the file or its imports happened to already be selected, even though import resolution itself was working correctly. Always resolves first-level imports only now, regardless of the sidebar's "Follow imports recursively" toggle — that toggle governs only the automatic tree-checkbox cascade.
+
+## [0.5.0] — 2026-08-31 (pre-release)
+
+### Added
+
+- **Base64-encoded output** — a checkbox next to the output-format picker base64-encodes the final handoff text on top of whichever format (XML/Markdown/plain) is already chosen, applied as a post-processing step rather than a new format. Stats (file count/size/token estimate) reflect the real content, not the ~33% larger encoded size. Also available as two new right-click commands — `AI Handoff: Generate from selection (Base64)` and `AI Handoff: Generate handoff from this file (Base64)` — that force it on without touching the sidebar's live settings.
+- **JS/TS import-following selection** — two new actions-footer toggles, "Look for imports (JS/TS)" and "Follow imports recursively" (recursive by default): when enabled, checking a JS/TS file's checkbox in the tree also auto-selects the files it imports. Resolution covers relative (`./`, `../`) imports and `tsconfig.json`/`jsconfig.json` path aliases (`compilerOptions.paths`/`baseUrl`, including a local `extends` chain) — bare package imports are never resolved onto `node_modules`. Also available as a standalone "Generate handoff with imports" right-click command (Explorer/editor context, JS/TS files only) that generates immediately from the file plus its direct (first-level) imports, without touching the sidebar's tree selection.
+
 ## [0.4.1] — 2026-08-31
 
 No functional changes from 0.4.0. `0.3.0`, `0.3.1`, and `0.4.0` were all
