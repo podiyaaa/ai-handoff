@@ -198,12 +198,12 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       this.base64Encode = enabled;
       void this.pushState();
     });
-    bridge.handle('actions/setLookForImports', ({ enabled }) => {
-      this.model.setLookForImports(enabled);
+    bridge.handle('actions/setLookForImports', async ({ enabled }) => {
+      await this.model.setLookForImports(enabled);
       void this.pushState();
     });
-    bridge.handle('actions/setImportsRecursive', ({ enabled }) => {
-      this.model.setImportsRecursive(enabled);
+    bridge.handle('actions/setImportsRecursive', async ({ enabled }) => {
+      await this.model.setImportsRecursive(enabled);
       void this.pushState();
     });
     bridge.handle('actions/overrideFile', async ({ path: relativePath }) => {
