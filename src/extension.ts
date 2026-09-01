@@ -396,6 +396,7 @@ function getAdHocHandoffOptions(base64Encode = false): HandoffOptions {
       scope: getConfig<DiffScope>('gitDiffScope', 'working'),
     },
     base64Encode,
+    accurateMultiRootPaths: getConfig('accurateMultiRootPaths', false),
   };
 }
 
