@@ -91,6 +91,10 @@
         "title": "AI Handoff: Generate handoff with imports (Base64)"
       },
       {
+        "command": "aiHandoff.addToSelection",
+        "title": "AI Handoff: Add to selection"
+      },
+      {
         "command": "aiHandoff.refreshTree",
         "title": "Refresh",
         "icon": "$(refresh)"
@@ -147,6 +151,10 @@
           "command": "aiHandoff.generateWithImportsBase64",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
           "group": "7_modification@102"
+        },
+        {
+          "command": "aiHandoff.addToSelection",
+          "group": "7_modification@103"
         }
       ],
       "editor/context": [
@@ -172,6 +180,10 @@
           "command": "aiHandoff.generateWithImportsBase64",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
           "group": "7_modification@103"
+        },
+        {
+          "command": "aiHandoff.addToSelection",
+          "group": "7_modification@104"
         }
       ],
       "editor/title/context": [
@@ -192,6 +204,10 @@
           "command": "aiHandoff.generateWithImportsBase64",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
           "group": "7_modification@102"
+        },
+        {
+          "command": "aiHandoff.addToSelection",
+          "group": "7_modification@103"
         }
       ],
       "view/title": [

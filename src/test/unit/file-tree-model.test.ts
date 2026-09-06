@@ -63,6 +63,14 @@ describe('FileTreeModel — single-root workspace', () => {
   it('resolveAbsolutePath joins directly against the single root', () => {
     expect(model.resolveAbsolutePath('src/index.ts')).to.equal(path.join(root, 'src', 'index.ts'));
   });
+
+  it('absoluteToOwningRelative is the exact inverse of resolveAbsolutePath for a single root', () => {
+    expect(model.absoluteToOwningRelative(path.join(root, 'src', 'index.ts'))).to.equal('src/index.ts');
+  });
+
+  it('absoluteToOwningRelative returns undefined for a path outside every workspace folder', () => {
+    expect(model.absoluteToOwningRelative('/definitely/outside/the/workspace.ts')).to.be.undefined;
+  });
 });
 
 describe('FileTreeModel — multi-root workspace', () => {
@@ -134,6 +142,19 @@ describe('FileTreeModel — multi-root workspace', () => {
 
   it('resolveAbsolutePath returns undefined for an unknown folder prefix', () => {
     expect(model.resolveAbsolutePath('not-a-real-folder/index.ts')).to.be.undefined;
+  });
+
+  it('absoluteToOwningRelative prefixes with the owning folder name, the exact inverse of resolveAbsolutePath', () => {
+    expect(model.absoluteToOwningRelative(path.join(rootA, 'src', 'index.ts'))).to.equal(
+      `${path.basename(rootA)}/src/index.ts`,
+    );
+    expect(model.absoluteToOwningRelative(path.join(rootB, 'README.md'))).to.equal(
+      `${path.basename(rootB)}/README.md`,
+    );
+  });
+
+  it('absoluteToOwningRelative returns undefined for a path outside both workspace folders', () => {
+    expect(model.absoluteToOwningRelative('/definitely/outside/both/roots.ts')).to.be.undefined;
   });
 });
 

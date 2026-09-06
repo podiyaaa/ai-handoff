@@ -853,7 +853,7 @@ export class FileTreeModel implements vscode.Disposable {
   }
 
   /** Convert a resolved absolute path back to a workspace-relative path, or `undefined` if it's outside every workspace folder. */
-  private absoluteToOwningRelative(absolutePath: string): string | undefined {
+  absoluteToOwningRelative(absolutePath: string): string | undefined {
     const owner = this.workspaceFolders.find((f) => {
       const rel = path.relative(f.uri.fsPath, absolutePath);
       return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
