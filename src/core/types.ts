@@ -116,6 +116,13 @@ export interface HandoffOptions {
   overriddenPaths?: string[];
   /** When set, appends a git diff section to the handoff, filtered down to the current file selection (empty selection → empty diff). */
   gitDiff?: GitDiffOptions;
+  /**
+   * When true, base64-encodes the final formatted output text — a
+   * post-processing step applied after `formatHandoff()`, not a new
+   * `OutputFormat`. `HandoffStats` (including `estimatedTokens`) still
+   * reflect the real, non-encoded content.
+   */
+  base64Encode?: boolean;
 }
 
 /** The final result of a handoff generation. */

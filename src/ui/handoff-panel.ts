@@ -62,6 +62,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   private lastSkipped: Array<{ relativePath: string; reason: string; detail?: string }> = [];
   private gitDiffEnabled: boolean;
   private diffScope: DiffScope;
+  private base64Encode = false;
   private readonly repoRootCache = new RepoRootCache();
   // computeState() does real fs I/O, so pushState() calls triggered in quick
   // succession (e.g. two toggleFile calls, or a toggle followed by a
@@ -193,6 +194,10 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         void this.pushState();
       }
     });
+    bridge.handle('actions/setBase64Encode', ({ enabled }) => {
+      this.base64Encode = enabled;
+      void this.pushState();
+    });
     bridge.handle('actions/overrideFile', async ({ path: relativePath }) => {
       this.overriddenPaths.add(relativePath);
       // Add the overridden path to the selection too, so it actually gets
@@ -237,6 +242,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       customInstructions: this.getConfig('showCustomInstructions', false) ? this.currentInstructions : undefined,
       overriddenPaths: Array.from(this.overriddenPaths),
       gitDiff: { enabled: this.gitDiffEnabled, scope: this.diffScope },
+      base64Encode: this.base64Encode,
     };
   }
 
@@ -269,6 +275,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         skipped: [],
         gitDiffEnabled: this.gitDiffEnabled,
         diffScope: this.diffScope,
+        base64Encode: this.base64Encode,
         hasWorkspace: false,
       };
     }
@@ -295,6 +302,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       skipped: this.lastSkipped,
       gitDiffEnabled: this.gitDiffEnabled,
       diffScope: this.diffScope,
+      base64Encode: this.base64Encode,
       hasWorkspace: true,
     };
   }
@@ -824,6 +832,11 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         <option value="markdown">Markdown</option>
         <option value="plain">Plain text</option>
       </select>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="base64-encode" />
+        <label for="base64-encode">Base64 encode output</label>
+      </div>
 
       <div class="checkbox-row">
         <input type="checkbox" id="diff-enabled" />

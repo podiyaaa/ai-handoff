@@ -62,8 +62,16 @@
         "title": "AI Handoff: Generate from selection"
       },
       {
+        "command": "aiHandoff.generateFromExplorerBase64",
+        "title": "AI Handoff: Generate from selection (Base64)"
+      },
+      {
         "command": "aiHandoff.generateFromEditor",
         "title": "AI Handoff: Generate handoff from this file"
+      },
+      {
+        "command": "aiHandoff.generateFromEditorBase64",
+        "title": "AI Handoff: Generate handoff from this file (Base64)"
       },
       {
         "command": "aiHandoff.generateFromSelection",
@@ -117,6 +125,10 @@
         {
           "command": "aiHandoff.generateFromExplorer",
           "group": "7_modification@99"
+        },
+        {
+          "command": "aiHandoff.generateFromExplorerBase64",
+          "group": "7_modification@100"
         }
       ],
       "editor/context": [
@@ -125,15 +137,23 @@
           "group": "7_modification@99"
         },
         {
+          "command": "aiHandoff.generateFromEditorBase64",
+          "group": "7_modification@100"
+        },
+        {
           "command": "aiHandoff.generateFromSelection",
           "when": "editorHasSelection",
-          "group": "7_modification@100"
+          "group": "7_modification@101"
         }
       ],
       "editor/title/context": [
         {
           "command": "aiHandoff.generateFromEditor",
           "group": "7_modification@99"
+        },
+        {
+          "command": "aiHandoff.generateFromEditorBase64",
+          "group": "7_modification@100"
         }
       ],
       "view/title": [
