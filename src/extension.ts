@@ -16,6 +16,7 @@
  * for how it got here.
  */
 
+import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { formatBytes } from './core/filter';
@@ -248,6 +249,37 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       const root = workspaceRoot ?? toGenerate[0].absolutePath;
       await doGenerateAndDispatch(toGenerate, root, adHocRepoRootCache, true);
+    }),
+    vscode.commands.registerCommand('aiHandoff.addToSelection', async (...args: unknown[]) => {
+      const absolutePaths = flattenUriArgs(args);
+      if (absolutePaths.length === 0) {
+        vscode.window.showWarningMessage('AI Handoff: no file or folder to add.');
+        return;
+      }
+      const before = new Set(fileTreeModel.getSelection());
+      for (const absolutePath of absolutePaths) {
+        const relativePath = fileTreeModel.absoluteToOwningRelative(absolutePath);
+        if (!relativePath) {
+          continue; // Outside all workspace folders — skip.
+        }
+        let isDirectory: boolean;
+        try {
+          isDirectory = (await fs.stat(absolutePath)).isDirectory();
+        } catch {
+          continue;
+        }
+        // Directories go through toggleDirectory (bulk-select, still subject
+        // to the smart filter/gitignore); files go through toggleFile (which
+        // also cascades imports if "Look for imports" is on) — same as
+        // ticking the corresponding checkbox by hand in the tree.
+        if (isDirectory) {
+          await fileTreeModel.toggleDirectory(relativePath, true);
+        } else {
+          await fileTreeModel.toggleFile(relativePath, true);
+        }
+      }
+      const added = fileTreeModel.getSelection().filter((p) => !before.has(p)).length;
+      vscode.window.showInformationMessage(`AI Handoff: added ${added} file(s) to the selection.`);
     }),
     vscode.commands.registerCommand('aiHandoff.refreshTree', () => {
       handoffPanel.refresh();
@@ -509,8 +541,14 @@ function tryGetFsPath(u: unknown): string | undefined {
  * then use vscode.workspace.getWorkspaceFolder() to compute the correct
  * relative path for each file regardless of which workspace folder it lives in.
  */
-function collectExplorerFiles(args: unknown[]): SelectedFile[] {
-  // Flatten: handles both (uri, uriArray) and any variation in arg order.
+/**
+ * Flatten Explorer/editor-context command args (VS Code passes
+ * arg0 = clicked Uri, arg1 = selection array, but the shape varies — Uri
+ * instances vs plain serialised objects, and multi-select order isn't
+ * guaranteed) into a deduplicated list of absolute filesystem paths, using
+ * tryGetFsPath() to extract the path from either form.
+ */
+function flattenUriArgs(args: unknown[]): string[] {
   const raw: unknown[] = [];
   for (const arg of args) {
     if (Array.isArray(arg)) {
@@ -521,14 +559,20 @@ function collectExplorerFiles(args: unknown[]): SelectedFile[] {
   }
 
   const seen = new Set<string>();
-  const result: SelectedFile[] = [];
+  const result: string[] = [];
   for (const r of raw) {
     const absolutePath = tryGetFsPath(r);
-    if (!absolutePath || seen.has(absolutePath)) {
-      continue;
+    if (absolutePath && !seen.has(absolutePath)) {
+      seen.add(absolutePath);
+      result.push(absolutePath);
     }
-    seen.add(absolutePath);
+  }
+  return result;
+}
 
+function collectExplorerFiles(args: unknown[]): SelectedFile[] {
+  const result: SelectedFile[] = [];
+  for (const absolutePath of flattenUriArgs(args)) {
     // Find the workspace folder that owns this file.
     const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(absolutePath));
     if (!folder) {
