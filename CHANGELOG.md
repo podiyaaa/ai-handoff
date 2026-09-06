@@ -5,6 +5,15 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-09-06
+
+### Added
+
+- **Base64-encoded output** — a checkbox next to the output-format picker base64-encodes the final handoff text on top of whichever format (XML/Markdown/plain) is already chosen, applied as a post-processing step rather than a new format. Stats (file count/size/token estimate) reflect the real content, not the ~33% larger encoded size. Also available as right-click commands — `Generate from selection (Base64)`, `Generate handoff from this file (Base64)`, and `Generate handoff with imports (Base64)` — that force it on without touching the sidebar's live settings.
+- **JS/TS import-following selection** — two actions-footer toggles, "Look for imports (JS/TS)" and "Follow imports recursively" (hidden until "Look for imports" is on; recursive by default): when enabled, checking a JS/TS file's checkbox in the tree also auto-selects the files it imports. Resolution covers relative (`./`, `../`) imports and `tsconfig.json`/`jsconfig.json` path aliases (`compilerOptions.paths`/`baseUrl`, including a local `extends` chain) — bare package imports are never resolved onto `node_modules`. Turning either toggle on or off applies retroactively to the current selection: widening adds newly-reachable files, narrowing prunes files the cascade added that are no longer justified — but never a file you checked directly, and never one still reachable through another selected file's imports.
+- **"Generate handoff with imports"** — a standalone right-click command (Explorer/editor context, JS/TS files only) that generates immediately from a file plus its direct (first-level) imports, without touching the sidebar's tree selection.
+- New setting `aiHandoff.accurateMultiRootPaths` (default off) — in a multi-root workspace, resolves each selected file's owning folder, its own `.gitignore`, and the tree's root label from the real workspace folder list, instead of always assuming the first folder. Fixes incorrect labeling/filtering when generating a handoff from a non-primary folder.
+
 ## [0.4.1] — 2026-08-31
 
 No functional changes from 0.4.0. `0.3.0`, `0.3.1`, and `0.4.0` were all
