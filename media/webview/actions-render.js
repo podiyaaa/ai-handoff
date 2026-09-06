@@ -24,6 +24,9 @@
     var $base64Encode = document.getElementById('base64-encode');
     var $diffEnabled = document.getElementById('diff-enabled');
     var $diffScope = document.getElementById('diff-scope');
+    var $lookForImports = document.getElementById('look-for-imports');
+    var $importsRecursive = document.getElementById('imports-recursive');
+    var $importsRecursiveRow = document.getElementById('imports-recursive-row');
     var $insWrap = document.getElementById('instructions-wrap');
     var $ins = document.getElementById('instructions');
     var $btn = document.getElementById('generate');
@@ -83,6 +86,13 @@
     });
     $diffScope.addEventListener('change', function () {
       bridge.call('actions/setDiffScope', { scope: $diffScope.value });
+    });
+    $lookForImports.addEventListener('change', function () {
+      $importsRecursiveRow.classList.toggle('hidden', !$lookForImports.checked);
+      bridge.call('actions/setLookForImports', { enabled: $lookForImports.checked });
+    });
+    $importsRecursive.addEventListener('change', function () {
+      bridge.call('actions/setImportsRecursive', { enabled: $importsRecursive.checked });
     });
     $ins.addEventListener('input', function () {
       clearTimeout(insDebounce);
@@ -193,6 +203,9 @@
       $diffLabel.classList.toggle('hidden', !state.gitDiffEnabled);
       $diffFiles.classList.toggle('hidden', !state.gitDiffEnabled);
       $diffFiles.textContent = state.stats.diffFileCount;
+      $lookForImports.checked = state.lookForImports;
+      $importsRecursive.checked = state.importsRecursive;
+      $importsRecursiveRow.classList.toggle('hidden', !state.lookForImports);
       if (state.showCustomInstructions) {
         $insWrap.classList.remove('hidden');
         if ($ins.value !== state.instructions) {
