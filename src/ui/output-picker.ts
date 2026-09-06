@@ -13,6 +13,7 @@
 
 import * as vscode from 'vscode';
 import type { OutputFormat } from '../core/types';
+import { sanitizeFilenameSegment } from '../core/filename';
 
 export type Destination = 'clipboard' | 'file' | 'tab';
 
@@ -56,16 +57,17 @@ export async function pickDestinations(): Promise<Destination[]> {
 }
 
 /**
- * Default filename for the handoff based on the chosen format.
+ * Default filename for the handoff based on a base name (typically the
+ * project name) and the chosen format.
  */
-export function defaultFilenameForFormat(format: OutputFormat): string {
+export function defaultFilenameForFormat(baseName: string, format: OutputFormat): string {
   switch (format) {
     case 'xml':
-      return 'handoff.xml';
+      return `${baseName}.xml`;
     case 'markdown':
-      return 'handoff.md';
+      return `${baseName}.md`;
     case 'plain':
-      return 'handoff.txt';
+      return `${baseName}.txt`;
   }
 }
 
@@ -120,7 +122,7 @@ export async function dispatchHandoff(
       case 'file': {
         const uri = await vscode.window.showSaveDialog({
           saveLabel: 'Save handoff',
-          defaultUri: defaultSaveUri(format),
+          defaultUri: await defaultSaveUri(format),
           filters: saveFiltersForFormat(format),
         });
         if (uri) {
@@ -148,14 +150,53 @@ export async function dispatchHandoff(
 
 /**
  * Pick a default Uri for the Save dialog: workspace root if available,
- * else the OS default.
+ * else the OS default. The filename is based on the project name rather
+ * than a generic "handoff" so multiple saved handoffs (e.g. from different
+ * projects) don't collide or read as interchangeable.
  */
-function defaultSaveUri(format: OutputFormat): vscode.Uri | undefined {
+async function defaultSaveUri(format: OutputFormat): Promise<vscode.Uri | undefined> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
     return undefined;
   }
-  const name = defaultFilenameForFormat(format);
+  const projectName = await resolveProjectName(folders);
+  const name = defaultFilenameForFormat(projectName, format);
   // Build a Uri inside the first workspace folder
   return vscode.Uri.file(folders[0].uri.fsPath + '/' + name);
+}
+
+/**
+ * Resolve a filename-safe project name to use as the default save name:
+ * a single folder's own package.json "name" field, falling back to the
+ * folder's own basename, or "workspace" when multiple folders are open
+ * (matching generateHandoff()'s own multi-root root-label convention).
+ * A timestamped fallback covers the case where nothing usable is found.
+ */
+async function resolveProjectName(folders: readonly vscode.WorkspaceFolder[]): Promise<string> {
+  if (folders.length > 1) {
+    return 'workspace';
+  }
+
+  const folder = folders[0];
+
+  try {
+    const pkgUri = vscode.Uri.joinPath(folder.uri, 'package.json');
+    const bytes = await vscode.workspace.fs.readFile(pkgUri);
+    const pkg = JSON.parse(Buffer.from(bytes).toString('utf8')) as { name?: unknown };
+    if (typeof pkg.name === 'string') {
+      const sanitized = sanitizeFilenameSegment(pkg.name);
+      if (sanitized) {
+        return sanitized;
+      }
+    }
+  } catch {
+    // No package.json, unreadable, or invalid JSON — fall through.
+  }
+
+  const folderName = sanitizeFilenameSegment(folder.name);
+  if (folderName) {
+    return folderName;
+  }
+
+  return `ai-handoff-${Date.now()}`;
 }
