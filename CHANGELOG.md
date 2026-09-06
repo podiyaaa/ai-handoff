@@ -5,6 +5,13 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-09-06
+
+### Added
+
+- **"Add to selection"** — right-click a file, a multi-selection of files, or a folder in the Explorer (or a file's editor tab), and it gets checked in the AI Handoff sidebar tree's selection — additive (adds to whatever's already checked, never clears first). Files go through the same path as clicking a checkbox by hand (so "Look for imports" cascading still applies); folders bulk-select, still subject to the smart filter/gitignore.
+- **"Generate handoff from selected lines (Base64)"** — the one generate command that didn't have a Base64 sibling now does, for parity with `Generate from selection`, `Generate handoff from this file`, and `Generate handoff with imports`.
+
 ## [0.6.1] — 2026-09-06
 
 ### Added
