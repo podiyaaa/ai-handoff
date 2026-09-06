@@ -78,6 +78,10 @@
         "title": "AI Handoff: Generate handoff from selected lines"
       },
       {
+        "command": "aiHandoff.generateFromSelectionBase64",
+        "title": "AI Handoff: Generate handoff from selected lines (Base64)"
+      },
+      {
         "command": "aiHandoff.generateFromPanel",
         "title": "AI Handoff: Generate handoff",
         "icon": "$(rocket)"
@@ -164,14 +168,19 @@
           "group": "7_modification@101"
         },
         {
+          "command": "aiHandoff.generateFromSelectionBase64",
+          "when": "editorHasSelection",
+          "group": "7_modification@102"
+        },
+        {
           "command": "aiHandoff.generateWithImports",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
-          "group": "7_modification@102"
+          "group": "7_modification@103"
         },
         {
           "command": "aiHandoff.generateWithImportsBase64",
           "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact",
-          "group": "7_modification@103"
+          "group": "7_modification@104"
         }
       ],
       "editor/title/context": [

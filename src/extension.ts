@@ -200,33 +200,20 @@ export function activate(context: vscode.ExtensionContext): void {
       await doGenerateAndDispatch(files, root, adHocRepoRootCache, true);
     }),
     vscode.commands.registerCommand('aiHandoff.generateFromSelection', async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor || editor.selection.isEmpty) {
-        vscode.window.showWarningMessage('AI Handoff: no text selected.');
+      const sel = resolveActiveSelectionOrWarn();
+      if (!sel) {
         return;
       }
-      const uri = editor.document.uri;
-      const absolutePath = uri.fsPath;
-      const folder = vscode.workspace.getWorkspaceFolder(uri);
-      if (!folder) {
-        vscode.window.showWarningMessage('AI Handoff: file is outside the workspace.');
+      const root = workspaceRoot ?? sel.absolutePath;
+      await doGenerateAndDispatch([sel], root, adHocRepoRootCache);
+    }),
+    vscode.commands.registerCommand('aiHandoff.generateFromSelectionBase64', async () => {
+      const sel = resolveActiveSelectionOrWarn();
+      if (!sel) {
         return;
       }
-      const relativePath = path.relative(folder.uri.fsPath, absolutePath).split(path.sep).join('/');
-
-      // VS Code selections are 0-indexed; convert to a 1-indexed inclusive
-      // line range. If the selection ends at column 0 of a later line (e.g.
-      // the user dragged from mid-line into the start of the next one),
-      // that next line isn't actually highlighted — don't count it.
-      const { selection } = editor;
-      let endLine = selection.end.line;
-      if (selection.end.character === 0 && endLine > selection.start.line) {
-        endLine -= 1;
-      }
-      const lineRange = { start: selection.start.line + 1, end: endLine + 1 };
-
-      const root = workspaceRoot ?? absolutePath;
-      await doGenerateAndDispatch([{ relativePath, absolutePath, lineRange }], root, adHocRepoRootCache);
+      const root = workspaceRoot ?? sel.absolutePath;
+      await doGenerateAndDispatch([sel], root, adHocRepoRootCache, true);
     }),
     vscode.commands.registerCommand('aiHandoff.generateFromPanel', async () => {
       await handoffPanel.runGenerate();
@@ -547,4 +534,39 @@ function collectExplorerFiles(args: unknown[]): SelectedFile[] {
     result.push({ relativePath, absolutePath });
   }
   return result;
+}
+
+/**
+ * Shared by generateFromSelection/generateFromSelectionBase64: resolves the
+ * active editor's current text selection to a SelectedFile with a lineRange,
+ * showing the appropriate warning and returning undefined if there's no
+ * active editor, no selection, or the file is outside the workspace.
+ */
+function resolveActiveSelectionOrWarn(): SelectedFile | undefined {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.selection.isEmpty) {
+    vscode.window.showWarningMessage('AI Handoff: no text selected.');
+    return undefined;
+  }
+  const uri = editor.document.uri;
+  const absolutePath = uri.fsPath;
+  const folder = vscode.workspace.getWorkspaceFolder(uri);
+  if (!folder) {
+    vscode.window.showWarningMessage('AI Handoff: file is outside the workspace.');
+    return undefined;
+  }
+  const relativePath = path.relative(folder.uri.fsPath, absolutePath).split(path.sep).join('/');
+
+  // VS Code selections are 0-indexed; convert to a 1-indexed inclusive line
+  // range. If the selection ends at column 0 of a later line (e.g. the user
+  // dragged from mid-line into the start of the next one), that next line
+  // isn't actually highlighted — don't count it.
+  const { selection } = editor;
+  let endLine = selection.end.line;
+  if (selection.end.character === 0 && endLine > selection.start.line) {
+    endLine -= 1;
+  }
+  const lineRange = { start: selection.start.line + 1, end: endLine + 1 };
+
+  return { relativePath, absolutePath, lineRange };
 }
