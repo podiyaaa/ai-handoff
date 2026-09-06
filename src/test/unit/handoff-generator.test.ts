@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { generateHandoff, readGitignore } from '../../services/handoff-generator';
+import { findOwningFolder, generateHandoff, readGitignore } from '../../services/handoff-generator';
 import type { HandoffOptions, SelectedFile } from '../../core/types';
 
 const baseOpts: HandoffOptions = {
@@ -459,6 +459,181 @@ describe('generateHandoff — git diff', () => {
       expect(labels).to.deep.equal([path.basename(rootA), path.basename(rootB)].sort());
     } finally {
       await fs.rm(rootA, { recursive: true, force: true });
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('findOwningFolder', () => {
+  it('matches a file exactly inside a folder', () => {
+    const folders = [{ name: 'a', path: '/root/a' }];
+    expect(findOwningFolder('/root/a/src/index.ts', folders)).to.deep.equal(folders[0]);
+  });
+
+  it('returns undefined when no folder owns the path', () => {
+    const folders = [{ name: 'a', path: '/root/a' }];
+    expect(findOwningFolder('/root/b/index.ts', folders)).to.be.undefined;
+  });
+
+  it('does not match a sibling folder that merely shares a path prefix as a string', () => {
+    // '/root/app' is not an ancestor of '/root/app-other/x.ts' even though the
+    // string 'app' is a prefix — path.relative()-based containment must not
+    // be fooled by this (a naive startsWith() check would be).
+    const folders = [{ name: 'app', path: '/root/app' }];
+    expect(findOwningFolder('/root/app-other/x.ts', folders)).to.be.undefined;
+  });
+
+  it('distinguishes two sibling folders sharing the same parent directory', () => {
+    // This is exactly the case that broke the old relativePath-segment-counting
+    // inferFolderRoot(): two real, distinct folders under one common parent.
+    const folders = [
+      { name: 'project-a', path: '/workspace/project-a' },
+      { name: 'project-b', path: '/workspace/project-b' },
+    ];
+    expect(findOwningFolder('/workspace/project-a/src/x.ts', folders)).to.deep.equal(folders[0]);
+    expect(findOwningFolder('/workspace/project-b/src/y.ts', folders)).to.deep.equal(folders[1]);
+  });
+
+  it('picks the longest-prefix (most specific) match when folders are nested', () => {
+    const folders = [
+      { name: 'outer', path: '/root' },
+      { name: 'inner', path: '/root/nested' },
+    ];
+    expect(findOwningFolder('/root/nested/x.ts', folders)).to.deep.equal(folders[1]);
+    expect(findOwningFolder('/root/other/x.ts', folders)).to.deep.equal(folders[0]);
+  });
+
+  it('matches a path equal to the folder root itself', () => {
+    const folders = [{ name: 'a', path: '/root/a' }];
+    expect(findOwningFolder('/root/a', folders)).to.deep.equal(folders[0]);
+  });
+});
+
+describe('generateHandoff — accurateMultiRootPaths (flag)', () => {
+  let root: string;
+  before(async () => { root = await makeWorkspace(); });
+  after(async () => { await fs.rm(root, { recursive: true, force: true }); });
+
+  it('flag off (default): root label is folder 0\'s name even when the whole selection is from a different folder — current behavior, unchanged', async () => {
+    const rootB = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-rootb-flagoff-'));
+    try {
+      await fs.writeFile(path.join(rootB, 'helper.ts'), 'export const h = 2;');
+      const folders = [
+        { name: path.basename(root), path: root },
+        { name: path.basename(rootB), path: rootB },
+      ];
+      const result = await generateHandoff(
+        [{ relativePath: 'helper.ts', absolutePath: path.join(rootB, 'helper.ts') }],
+        { ...baseOpts, smartFilter: false },
+        root,
+        folders,
+      );
+      expect(result.text).to.include(`${path.basename(root)}/`);
+      expect(result.text).to.not.include(`${path.basename(rootB)}/`);
+    } finally {
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
+
+  it('flag on: root label uses the file\'s actual owning folder, not folder 0', async () => {
+    const rootB = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-rootb-label-'));
+    try {
+      await fs.writeFile(path.join(rootB, 'helper.ts'), 'export const h = 2;');
+      const folders = [
+        { name: path.basename(root), path: root },
+        { name: path.basename(rootB), path: rootB },
+      ];
+      const result = await generateHandoff(
+        [{ relativePath: 'helper.ts', absolutePath: path.join(rootB, 'helper.ts') }],
+        { ...baseOpts, smartFilter: false, accurateMultiRootPaths: true },
+        root,
+        folders,
+      );
+      expect(result.included).to.have.lengthOf(1);
+      expect(result.text).to.include(`${path.basename(rootB)}/`);
+      expect(result.text).to.not.include(`${path.basename(root)}/`);
+    } finally {
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
+
+  it('flag on: applies the selected file\'s OWN folder .gitignore, not folder 0\'s', async () => {
+    const rootB = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-rootb-gitignore-'));
+    try {
+      // root's own .gitignore (from makeWorkspace) has no rule for secret.ts —
+      // only rootB's does. If the fix works, secret.ts is skipped; if it
+      // silently fell back to root's .gitignore, it would wrongly be included.
+      await fs.writeFile(path.join(rootB, '.gitignore'), 'secret.ts\n');
+      await fs.writeFile(path.join(rootB, 'secret.ts'), 'export const s = 1;');
+      await fs.writeFile(path.join(rootB, 'ok.ts'), 'export const ok = 1;');
+      const folders = [
+        { name: path.basename(root), path: root },
+        { name: path.basename(rootB), path: rootB },
+      ];
+      const selection = [
+        { relativePath: 'secret.ts', absolutePath: path.join(rootB, 'secret.ts') },
+        { relativePath: 'ok.ts', absolutePath: path.join(rootB, 'ok.ts') },
+      ];
+
+      const accurate = await generateHandoff(
+        selection,
+        { ...baseOpts, smartFilter: false, accurateMultiRootPaths: true },
+        root,
+        folders,
+      );
+      expect(accurate.included.map((f) => f.relativePath).sort()).to.deep.equal(['ok.ts']);
+      expect(
+        accurate.skipped.some((f) => f.relativePath === 'secret.ts' && f.reason === 'gitignore'),
+      ).to.be.true;
+
+      // Same selection, flag off — proves the bug is real by default: folder
+      // 0's (irrelevant) .gitignore is consulted instead of rootB's own, so
+      // secret.ts wrongly slips through.
+      const legacy = await generateHandoff(
+        selection,
+        { ...baseOpts, smartFilter: false },
+        root,
+        folders,
+      );
+      expect(legacy.included.map((f) => f.relativePath).sort()).to.deep.equal(['ok.ts', 'secret.ts']);
+    } finally {
+      await fs.rm(rootB, { recursive: true, force: true });
+    }
+  });
+
+  it('flag on: resolves correctly even when relativePath already carries a sidebar-style folder-name prefix', async () => {
+    const rootB = await fs.mkdtemp(path.join(os.tmpdir(), 'aih-rootb-prefix-'));
+    try {
+      await fs.writeFile(path.join(rootB, 'helper.ts'), 'export const h = 2;');
+      const folders = [
+        { name: path.basename(root), path: root },
+        { name: path.basename(rootB), path: rootB },
+      ];
+
+      // Ad hoc entry point convention (collectExplorerFiles): no folder-name prefix.
+      const unprefixed = await generateHandoff(
+        [{ relativePath: 'helper.ts', absolutePath: path.join(rootB, 'helper.ts') }],
+        { ...baseOpts, smartFilter: false, accurateMultiRootPaths: true },
+        root,
+        folders,
+      );
+      // Sidebar entry point convention (FileTreeModel.toRelative()): prefixed.
+      const prefixed = await generateHandoff(
+        [
+          {
+            relativePath: `${path.basename(rootB)}/helper.ts`,
+            absolutePath: path.join(rootB, 'helper.ts'),
+          },
+        ],
+        { ...baseOpts, smartFilter: false, accurateMultiRootPaths: true },
+        root,
+        folders,
+      );
+
+      expect(prefixed.included).to.have.lengthOf(1);
+      expect(prefixed.included[0].relativePath).to.equal(unprefixed.included[0].relativePath);
+      expect(prefixed.text).to.include(`${path.basename(rootB)}/`);
+    } finally {
       await fs.rm(rootB, { recursive: true, force: true });
     }
   });

@@ -123,6 +123,15 @@ export interface HandoffOptions {
    * reflect the real, non-encoded content.
    */
   base64Encode?: boolean;
+  /**
+   * Feature flag (default off) — resolves each selected file's owning
+   * workspace folder, its own `.gitignore`, and the tree's root label from
+   * the real workspace folder list, instead of always assuming the first
+   * folder. Fixes incorrect labeling/filtering when generating from a
+   * non-primary folder in a multi-root workspace. See
+   * `findOwningFolder()`/`generateHandoff()` in `services/handoff-generator.ts`.
+   */
+  accurateMultiRootPaths?: boolean;
 }
 
 /** The final result of a handoff generation. */
