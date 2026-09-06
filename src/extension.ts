@@ -109,6 +109,39 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  /**
+   * Shared by generateWithImports/generateWithImportsBase64: resolves the
+   * right-clicked JS/TS file(s) plus their direct (first-level) imports to
+   * a deduplicated SelectedFile[], ready for doGenerateAndDispatch. Never
+   * touches FileTreeModel's selection — always first-level only, regardless
+   * of the sidebar's "Follow imports recursively" toggle (see
+   * PanelState.importsRecursive's doc comment).
+   */
+  async function collectFilesWithImports(args: unknown[]): Promise<SelectedFile[]> {
+    const files = collectExplorerFiles(args);
+    const seen = new Set<string>();
+    const toGenerate: SelectedFile[] = [];
+    for (const file of files) {
+      if (seen.has(file.relativePath)) {
+        continue;
+      }
+      seen.add(file.relativePath);
+      toGenerate.push(file);
+      const closure = await fileTreeModel.resolveImportClosure(file.relativePath, false);
+      for (const relativePath of closure) {
+        if (seen.has(relativePath)) {
+          continue;
+        }
+        seen.add(relativePath);
+        const absolutePath = fileTreeModel.resolveAbsolutePath(relativePath);
+        if (absolutePath) {
+          toGenerate.push({ relativePath, absolutePath });
+        }
+      }
+    }
+    return toGenerate;
+  }
+
   // -- Commands --
   context.subscriptions.push(
     vscode.commands.registerCommand('aiHandoff.generateFromExplorer', async (
@@ -199,38 +232,22 @@ export function activate(context: vscode.ExtensionContext): void {
       await handoffPanel.runGenerate();
     }),
     vscode.commands.registerCommand('aiHandoff.generateWithImports', async (...args: unknown[]) => {
-      const files = collectExplorerFiles(args);
-      if (files.length === 0) {
+      const toGenerate = await collectFilesWithImports(args);
+      if (toGenerate.length === 0) {
         vscode.window.showWarningMessage('AI Handoff: no file to generate from.');
         return;
       }
-      // Standalone, like generateFromExplorer/generateFromEditor — never
-      // touches the sidebar tree's selection. Always first-level imports
-      // only: this command doesn't read the footer's "Follow imports
-      // recursively" toggle, which governs only the automatic
-      // tree-checkbox cascade (FileTreeModel.toggleFile).
-      const seen = new Set<string>();
-      const toGenerate: SelectedFile[] = [];
-      for (const file of files) {
-        if (seen.has(file.relativePath)) {
-          continue;
-        }
-        seen.add(file.relativePath);
-        toGenerate.push(file);
-        const closure = await fileTreeModel.resolveImportClosure(file.relativePath, false);
-        for (const relativePath of closure) {
-          if (seen.has(relativePath)) {
-            continue;
-          }
-          seen.add(relativePath);
-          const absolutePath = fileTreeModel.resolveAbsolutePath(relativePath);
-          if (absolutePath) {
-            toGenerate.push({ relativePath, absolutePath });
-          }
-        }
-      }
       const root = workspaceRoot ?? toGenerate[0].absolutePath;
       await doGenerateAndDispatch(toGenerate, root, adHocRepoRootCache);
+    }),
+    vscode.commands.registerCommand('aiHandoff.generateWithImportsBase64', async (...args: unknown[]) => {
+      const toGenerate = await collectFilesWithImports(args);
+      if (toGenerate.length === 0) {
+        vscode.window.showWarningMessage('AI Handoff: no file to generate from.');
+        return;
+      }
+      const root = workspaceRoot ?? toGenerate[0].absolutePath;
+      await doGenerateAndDispatch(toGenerate, root, adHocRepoRootCache, true);
     }),
     vscode.commands.registerCommand('aiHandoff.refreshTree', () => {
       handoffPanel.refresh();
