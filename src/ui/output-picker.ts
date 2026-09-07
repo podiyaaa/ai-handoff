@@ -152,7 +152,9 @@ export async function dispatchHandoff(
  * Pick a default Uri for the Save dialog: workspace root if available,
  * else the OS default. The filename is based on the project name rather
  * than a generic "handoff" so multiple saved handoffs (e.g. from different
- * projects) don't collide or read as interchangeable.
+ * projects) don't collide or read as interchangeable. A timestamp is
+ * always appended so repeated saves from the same project don't collide
+ * or silently overwrite each other either.
  */
 async function defaultSaveUri(format: OutputFormat): Promise<vscode.Uri | undefined> {
   const folders = vscode.workspace.workspaceFolders;
@@ -160,7 +162,7 @@ async function defaultSaveUri(format: OutputFormat): Promise<vscode.Uri | undefi
     return undefined;
   }
   const projectName = await resolveProjectName(folders);
-  const name = defaultFilenameForFormat(projectName, format);
+  const name = defaultFilenameForFormat(`${projectName}-${Date.now()}`, format);
   // Build a Uri inside the first workspace folder
   return vscode.Uri.file(folders[0].uri.fsPath + '/' + name);
 }
@@ -170,7 +172,8 @@ async function defaultSaveUri(format: OutputFormat): Promise<vscode.Uri | undefi
  * a single folder's own package.json "name" field, falling back to the
  * folder's own basename, or "workspace" when multiple folders are open
  * (matching generateHandoff()'s own multi-root root-label convention).
- * A timestamped fallback covers the case where nothing usable is found.
+ * Falls back to "ai-handoff" when nothing usable is found (the caller
+ * always appends a timestamp on top, so this alone is never ambiguous).
  */
 async function resolveProjectName(folders: readonly vscode.WorkspaceFolder[]): Promise<string> {
   if (folders.length > 1) {
@@ -198,5 +201,5 @@ async function resolveProjectName(folders: readonly vscode.WorkspaceFolder[]): P
     return folderName;
   }
 
-  return `ai-handoff-${Date.now()}`;
+  return 'ai-handoff';
 }
