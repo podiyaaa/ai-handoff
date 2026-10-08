@@ -5,6 +5,12 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-10-08
+
+### Changed
+
+- **Default save-to-file name** now uses the project name instead of a generic `handoff.*` — resolved from the workspace folder's `package.json` `name` field, falling back to the folder's own basename, or `workspace` when multiple folders are open. A timestamp is always appended so repeated saves never collide or silently overwrite each other.
+
 ## [0.7.0] — 2026-09-06
 
 ### Added
