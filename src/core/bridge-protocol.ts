@@ -143,6 +143,8 @@ export interface BridgeEvents {
   'actions/generating': { busy: boolean };
   /** General-purpose error display for the Actions footer — not tree-specific. */
   error: { message: string };
+  /** Scoped to "Generate from branch diff"'s own error banner — kept separate from `error` so a ref-diff failure doesn't surface next to the unrelated main Generate button. */
+  'refDiff/error': { message: string };
 }
 
 export type BridgeMethodName = keyof BridgeMethods;

@@ -482,11 +482,11 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
    */
   private async generateFromRefDiff(): Promise<void> {
     if (!this.workspaceRoot) {
-      this.bridge?.emit('error', { message: 'No workspace folder is open.' });
+      this.bridge?.emit('refDiff/error', { message: 'No workspace folder is open.' });
       return;
     }
     if (!this.refDiffBaseRef || !this.refDiffCompareRef) {
-      this.bridge?.emit('error', { message: 'Pick both a base and a compare branch.' });
+      this.bridge?.emit('refDiff/error', { message: 'Pick both a base and a compare branch.' });
       return;
     }
 
@@ -499,7 +499,10 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         this.refDiffCompareRef,
         {
           format,
-          includeLineNumbers: this.getConfig('includeLineNumbers', false),
+          // Always on for this feature, regardless of the global
+          // aiHandoff.includeLineNumbers setting (which defaults off) —
+          // giving an AI exact line references is the whole point here.
+          includeLineNumbers: true,
           maxFileSizeKB: this.getConfig('maxFileSizeKB', 1024),
           binaryHandling: this.getConfig('binaryHandling', 'placeholder'),
           tokenEstimationRatio: this.getConfig('tokenEstimationRatio', 4),
@@ -510,7 +513,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       );
 
       if (result.included.length === 0) {
-        this.bridge?.emit('error', { message: 'No files differ between those two branches.' });
+        this.bridge?.emit('refDiff/error', { message: 'No files differ between those two branches.' });
         return;
       }
 
@@ -528,7 +531,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       vscode.window.showInformationMessage(summary);
     } catch (e) {
       const message = e instanceof RefDiffError ? e.message : e instanceof Error ? e.message : String(e);
-      this.bridge?.emit('error', { message });
+      this.bridge?.emit('refDiff/error', { message });
       if (!(e instanceof RefDiffError)) {
         vscode.window.showErrorMessage(`AI Handoff: ${message}`);
       }
@@ -991,11 +994,23 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         <div class="section-title">Generate from branch diff</div>
         <div class="subsection-empty hidden" id="refdiff-no-repo">No git repository found in this workspace.</div>
         <div id="refdiff-fields">
+          <label for="refdiff-format">Output format</label>
+          <select id="refdiff-format">
+            <option value="xml">XML (best for AI)</option>
+            <option value="markdown">Markdown</option>
+            <option value="plain">Plain text</option>
+          </select>
+          <div class="checkbox-row">
+            <input type="checkbox" id="refdiff-base64-encode" />
+            <label for="refdiff-base64-encode">Base64 encode output</label>
+          </div>
+
           <label for="refdiff-base">Base branch</label>
           <select id="refdiff-base"><option value="">Select a branch…</option></select>
           <label for="refdiff-compare">Compare branch</label>
           <select id="refdiff-compare"><option value="">Select a branch…</option></select>
           <button class="primary" id="refdiff-generate">Generate from branch diff</button>
+          <div id="refdiff-error" class="error hidden"></div>
         </div>
       </div>
 
