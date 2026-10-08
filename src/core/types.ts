@@ -19,6 +19,29 @@ export type SkipReason =
 
 export type DiffScope = 'working' | 'staged' | 'both';
 
+/**
+ * A changed file between two git refs (see `services/ref-diff-reader.ts`).
+ * Deleted files never appear here — they're filtered out before this type
+ * is populated, since there's no content to show for them at `compareRef`.
+ */
+export type RefDiffChangeType = 'added' | 'modified' | 'renamed';
+
+export interface RefDiffFileEntry {
+  /** Repo-root-relative path, as git reports it. */
+  relativePath: string;
+  /** Set when changeType === 'renamed'. */
+  oldPath?: string;
+  changeType: RefDiffChangeType;
+}
+
+/** The result of listing changed files between two refs in one repo. */
+export interface RefDiffResult {
+  files: RefDiffFileEntry[];
+  /** 'no-repos-found': no git repo in the workspace. 'git-not-found': the git binary isn't on PATH. 'invalid-refs': baseRef/compareRef don't resolve, or are identical. */
+  error?: 'no-repos-found' | 'git-not-found' | 'invalid-refs';
+  errorDetail?: string;
+}
+
 export type DiffChangeType = 'added' | 'modified' | 'deleted' | 'renamed';
 
 /** A single file's changes as reported by `git diff`. */

@@ -44,6 +44,8 @@ import type { DiffScope, HandoffOptions, OutputFormat, SelectedFile, SelectionMe
 import type { FileTreeModel } from '../services/file-tree-model';
 import { RepoRootCache } from '../services/git-diff-reader';
 import { generateHandoff } from '../services/handoff-generator';
+import { listLocalBranches } from '../services/ref-diff-reader';
+import { generateHandoffFromRefDiff, RefDiffError } from '../services/ref-diff-generator';
 import type { SelectionStore } from '../services/selection-store';
 import { dispatchHandoff, pickDestinations } from './output-picker';
 import { HostBridge } from './webview-host-bridge';
@@ -63,6 +65,8 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   private gitDiffEnabled: boolean;
   private diffScope: DiffScope;
   private base64Encode = false;
+  private refDiffBaseRef = '';
+  private refDiffCompareRef = '';
   private readonly repoRootCache = new RepoRootCache();
   // computeState() does real fs I/O, so pushState() calls triggered in quick
   // succession (e.g. two toggleFile calls, or a toggle followed by a
@@ -217,6 +221,17 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     });
     bridge.handle('actions/generate', () => this.generate());
 
+    bridge.handle('refDiff/listBranches', () => this.listRefDiffBranches());
+    bridge.handle('refDiff/setBaseRef', ({ ref }) => {
+      this.refDiffBaseRef = ref;
+      void this.pushState();
+    });
+    bridge.handle('refDiff/setCompareRef', ({ ref }) => {
+      this.refDiffCompareRef = ref;
+      void this.pushState();
+    });
+    bridge.handle('refDiff/generate', () => this.generateFromRefDiff());
+
     bridge.handle('bookmarks/save', () => this.saveBookmark());
     bridge.handle('bookmarks/load', ({ name }) => this.loadBookmark(name));
     bridge.handle('bookmarks/delete', async ({ name }) => {
@@ -288,6 +303,8 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
         lookForImports: this.model.getLookForImports(),
         importsRecursive: this.model.getImportsRecursive(),
         hasWorkspace: false,
+        refDiffBaseRef: this.refDiffBaseRef,
+        refDiffCompareRef: this.refDiffCompareRef,
       };
     }
 
@@ -317,7 +334,29 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       lookForImports: this.model.getLookForImports(),
       importsRecursive: this.model.getImportsRecursive(),
       hasWorkspace: true,
+      refDiffBaseRef: this.refDiffBaseRef,
+      refDiffCompareRef: this.refDiffCompareRef,
     };
+  }
+
+  /** Resolves the first repo root across workspace folders — same "assume the first folder" scoping as `ref-diff-generator.ts`. */
+  private async resolveFirstRepoRootForRefDiff(): Promise<string | undefined> {
+    for (const folder of this.getWorkspaceFolders()) {
+      const repos = await this.repoRootCache.resolveForFolder(folder);
+      if (repos.length > 0) {
+        return repos[0].toplevel;
+      }
+    }
+    return undefined;
+  }
+
+  private async listRefDiffBranches(): Promise<{ branches: string[]; repoFound: boolean }> {
+    const repoRoot = await this.resolveFirstRepoRootForRefDiff();
+    if (!repoRoot) {
+      return { branches: [], repoFound: false };
+    }
+    const branches = await listLocalBranches(repoRoot);
+    return { branches, repoFound: true };
   }
 
   private async pushState(): Promise<void> {
@@ -428,6 +467,71 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       const message = e instanceof Error ? e.message : String(e);
       this.bridge?.emit('error', { message });
       vscode.window.showErrorMessage(`AI Handoff: ${message}`);
+    } finally {
+      this.bridge?.emit('actions/generating', { busy: false });
+    }
+  }
+
+  /**
+   * "Generate from branch diff" — entirely independent of the sidebar tree
+   * selection. Produces the full content of every file that differs
+   * between the two chosen local branches (three-dot/merge-base diff),
+   * deleted files excluded, each file numbered from line 1. Reuses the
+   * panel's live format/base64/custom-instructions settings, same as the
+   * main `generate()` flow.
+   */
+  private async generateFromRefDiff(): Promise<void> {
+    if (!this.workspaceRoot) {
+      this.bridge?.emit('error', { message: 'No workspace folder is open.' });
+      return;
+    }
+    if (!this.refDiffBaseRef || !this.refDiffCompareRef) {
+      this.bridge?.emit('error', { message: 'Pick both a base and a compare branch.' });
+      return;
+    }
+
+    this.bridge?.emit('actions/generating', { busy: true });
+    try {
+      const format = this.currentFormat;
+      const result = await generateHandoffFromRefDiff(
+        this.getWorkspaceFolders(),
+        this.refDiffBaseRef,
+        this.refDiffCompareRef,
+        {
+          format,
+          includeLineNumbers: this.getConfig('includeLineNumbers', false),
+          maxFileSizeKB: this.getConfig('maxFileSizeKB', 1024),
+          binaryHandling: this.getConfig('binaryHandling', 'placeholder'),
+          tokenEstimationRatio: this.getConfig('tokenEstimationRatio', 4),
+          customInstructions: this.getConfig('showCustomInstructions', false) ? this.currentInstructions : undefined,
+          base64Encode: this.base64Encode,
+        },
+        this.repoRootCache,
+      );
+
+      if (result.included.length === 0) {
+        this.bridge?.emit('error', { message: 'No files differ between those two branches.' });
+        return;
+      }
+
+      const destinations = await pickDestinations();
+      if (destinations.length === 0) {
+        return;
+      }
+
+      const messages = await dispatchHandoff(result.text, format, destinations);
+      const summary =
+        `AI Handoff: ${result.stats.fileCount} files, ` +
+        `${formatBytes(result.stats.totalSizeBytes)}, ` +
+        `~${formatTokenCount(result.stats.estimatedTokens)} tokens. ` +
+        messages.join('. ');
+      vscode.window.showInformationMessage(summary);
+    } catch (e) {
+      const message = e instanceof RefDiffError ? e.message : e instanceof Error ? e.message : String(e);
+      this.bridge?.emit('error', { message });
+      if (!(e instanceof RefDiffError)) {
+        vscode.window.showErrorMessage(`AI Handoff: ${message}`);
+      }
     } finally {
       this.bridge?.emit('actions/generating', { busy: false });
     }
@@ -805,6 +909,16 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
     .subsection a.action:hover { text-decoration: underline; }
     .subsection li .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
     .subsection li .detail { opacity: 0.55; font-size: 0.85em; }
+    /* "Generate from branch diff" — a standalone action independent of the
+       tree selection, so it gets its own divider rather than living inside
+       the selection-based stats/format block above it. */
+    .refdiff-section {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+    }
+    .refdiff-section > .section-title { font-weight: 600; opacity: 0.85; margin-bottom: 4px; }
+    .refdiff-section .subsection-empty { margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -873,6 +987,18 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
       <button class="primary" id="generate">Generate Handoff</button>
       <div id="actions-error" class="error hidden"></div>
 
+      <div class="refdiff-section">
+        <div class="section-title">Generate from branch diff</div>
+        <div class="subsection-empty hidden" id="refdiff-no-repo">No git repository found in this workspace.</div>
+        <div id="refdiff-fields">
+          <label for="refdiff-base">Base branch</label>
+          <select id="refdiff-base"><option value="">Select a branch…</option></select>
+          <label for="refdiff-compare">Compare branch</label>
+          <select id="refdiff-compare"><option value="">Select a branch…</option></select>
+          <button class="primary" id="refdiff-generate">Generate from branch diff</button>
+        </div>
+      </div>
+
       <div class="tier2-toggle" id="tier2-toggle" role="button" aria-expanded="false">
         <span class="codicon" id="tier2-icon"></span>
         <span>Instructions, bookmarks &amp; skipped files</span>
@@ -914,6 +1040,7 @@ export class HandoffPanelProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}" src="${mediaUri('tree-render.js')}"></script>
   <script nonce="${nonce}" src="${mediaUri('search-render.js')}"></script>
   <script nonce="${nonce}" src="${mediaUri('actions-render.js')}"></script>
+  <script nonce="${nonce}" src="${mediaUri('refdiff-render.js')}"></script>
   <script nonce="${nonce}" src="${mediaUri('main.js')}"></script>
 </body>
 </html>`;

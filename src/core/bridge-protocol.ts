@@ -69,6 +69,9 @@ export interface PanelState {
   importsRecursive: boolean;
   /** False when no workspace folder is open — the tree shows an explanatory empty state instead of a silently blank list. */
   hasWorkspace: boolean;
+  /** Currently selected base/compare branches for "Generate from branch diff" — empty string means unselected. */
+  refDiffBaseRef: string;
+  refDiffCompareRef: string;
 }
 
 /**
@@ -109,6 +112,11 @@ export interface BridgeMethods {
   'actions/setImportsRecursive': { params: { enabled: boolean }; result: void };
   'actions/generate': { params: void; result: void };
   'actions/overrideFile': { params: { path: string }; result: void };
+  /** Lists local branches for "Generate from branch diff"'s two dropdowns. Never fetches — reflects whatever the user already has locally. `repoFound: false` means no git repo was found in the workspace. */
+  'refDiff/listBranches': { params: void; result: { branches: string[]; repoFound: boolean } };
+  'refDiff/setBaseRef': { params: { ref: string }; result: void };
+  'refDiff/setCompareRef': { params: { ref: string }; result: void };
+  'refDiff/generate': { params: void; result: void };
   'bookmarks/save': { params: void; result: void };
   'bookmarks/load': { params: { name: string }; result: void };
   'bookmarks/delete': { params: { name: string }; result: void };
