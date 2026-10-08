@@ -6,16 +6,16 @@ import {
 } from '../../ui/output-picker';
 
 describe('defaultFilenameForFormat', () => {
-  it('returns handoff.xml for xml', () => {
-    expect(defaultFilenameForFormat('xml')).to.equal('handoff.xml');
+  it('returns <name>.xml for xml', () => {
+    expect(defaultFilenameForFormat('my-project', 'xml')).to.equal('my-project.xml');
   });
 
-  it('returns handoff.md for markdown', () => {
-    expect(defaultFilenameForFormat('markdown')).to.equal('handoff.md');
+  it('returns <name>.md for markdown', () => {
+    expect(defaultFilenameForFormat('my-project', 'markdown')).to.equal('my-project.md');
   });
 
-  it('returns handoff.txt for plain', () => {
-    expect(defaultFilenameForFormat('plain')).to.equal('handoff.txt');
+  it('returns <name>.txt for plain', () => {
+    expect(defaultFilenameForFormat('my-project', 'plain')).to.equal('my-project.txt');
   });
 });
 
