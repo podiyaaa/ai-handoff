@@ -5,6 +5,12 @@ All notable changes to the **AI Handoff** extension will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-10-09
+
+### Added
+
+- **"Generate from branch diff"** — a new, standalone sidebar section (independent of the file tree selection): pick a base and a compare local branch, and get the full current content (not diff hunks) of every file that differs between them, line-numbered from 1 — for handing an entire PR's changed files to an AI to act on review comments, with complete surrounding context rather than just the changed lines. Uses a three-dot/merge-base diff (`git diff base...compare`), matching what GitHub shows reviewers on a PR's "Files changed" tab. Deleted files are excluded; renamed files show under their new path. Entirely offline — local git only, no `gh`/GitHub API calls; keeping local branches up to date (e.g. `git fetch`) is your own responsibility. Reuses the existing Output format / Base64 encode controls, duplicated into the new section for convenience.
+
 ## [0.8.0] — 2026-10-08
 
 ### Changed
