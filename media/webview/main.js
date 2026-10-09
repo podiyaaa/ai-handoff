@@ -14,6 +14,7 @@
     window.AiHandoffSearchRender.init(bridge);
     window.AiHandoffTreeRender.init(bridge);
     window.AiHandoffActionsRender.init(bridge);
+    window.AiHandoffRefDiffRender.init(bridge);
   }
 
   if (document.readyState === 'loading') {
